@@ -351,26 +351,49 @@ async def invite_to_group(
             "shared_key": shared_key
         }
     
-    # 简化实现：直接添加成员到群组
-    # TODO: 后续实现跨 Portal 邀请
+    # 跨 Portal 发送邀请
+    settings = get_settings()
     try:
-        await db.execute(
-            group_members.insert().values(
-                group_id=group.id,
-                contact_id=contact.id
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{contact.portal_url}/api/groups/invite/receive",
+                json={
+                    "group_id": group.id,
+                    "group_name": group.name,
+                    "inviter_portal": settings.PORTAL_URL,
+                    "shared_key": shared_key,
+                    "timestamp": datetime.utcnow().isoformat()
+                },
+                timeout=10.0
             )
-        )
-        await db.flush()
-        
-        return {
-            "status": "success",
-            "message": "Member added",
-            "shared_key": shared_key
-        }
+            
+            if response.status_code == 200:
+                # 对方接受邀请后，添加成员到群组
+                await db.execute(
+                    group_members.insert().values(
+                        group_id=group.id,
+                        contact_id=contact.id
+                    )
+                )
+                await db.flush()
+                
+                return {
+                    "status": "success",
+                    "message": "Invitation sent and accepted",
+                    "shared_key": shared_key
+                }
+            else:
+                # 对方未接受，不添加成员
+                return {
+                    "status": "pending",
+                    "message": "Invitation sent, waiting for acceptance"
+                }
     except Exception as e:
+        print(f"Failed to send invitation: {e}")
+        # 发送失败，返回错误
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to add member: {str(e)}"
+            detail=f"Failed to send invitation: {str(e)}"
         )
 
 
@@ -381,7 +404,7 @@ async def receive_group_invite(
 ):
     """
     接收群邀请（跨 Portal 调用）
-    不需要认证，用 shared_key 验证
+    不需要认证，自动接受邀请
     """
     # 查找当前用户
     result = await db.execute(select(User).where(User.is_active == True).limit(1))
@@ -393,12 +416,81 @@ async def receive_group_invite(
             detail="No active user"
         )
     
-    # 创建群邀请记录
-    # TODO: 创建邀请表存储邀请信息
+    # 获取邀请数据
+    group_id = invite_data.get("group_id")
+    group_name = invite_data.get("group_name", f"群-{group_id}")
+    inviter_portal = invite_data.get("inviter_portal")
+    shared_key = invite_data.get("shared_key")
+    
+    if not all([group_id, inviter_portal, shared_key]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing required fields"
+        )
+    
+    # 查找或创建联系人（邀请者）
+    result = await db.execute(
+        select(Contact).where(
+            and_(
+                Contact.portal_url == inviter_portal,
+                Contact.is_active == True
+            )
+        )
+    )
+    contact = result.scalar_one_or_none()
+    
+    if not contact:
+        # 如果没有联系人记录，创建一个
+        contact = Contact(
+            owner_id=current_user.id,
+            display_name=f"用户-{inviter_portal.split('//')[1]}",
+            portal_url=inviter_portal,
+            shared_key=shared_key,
+            is_active=True
+        )
+        db.add(contact)
+        await db.flush()
+    
+    # 查找或创建群组
+    result = await db.execute(
+        select(Group).where(
+            and_(
+                Group.id == group_id,
+                Group.is_active == True
+            )
+        )
+    )
+    group = result.scalar_one_or_none()
+    
+    if not group:
+        # 创建新群组
+        group = Group(
+            id=group_id,
+            owner_id=current_user.id,
+            name=group_name,
+            is_active=True
+        )
+        db.add(group)
+        await db.flush()
+    
+    # 添加成员关系到群组
+    try:
+        await db.execute(
+            group_members.insert().values(
+                group_id=group.id,
+                contact_id=contact.id
+            )
+        )
+        await db.flush()
+    except Exception:
+        # 已存在，忽略错误
+        pass
     
     return {
         "status": "success",
-        "message": "Invitation received"
+        "message": "Joined group",
+        "group_id": group.id,
+        "group_name": group.name
     }
 
 
