@@ -10,6 +10,7 @@ from models import User, Contact, Message, Group, GroupMessage
 from schemas import MessageCreate, MessageResponse, GroupMessageCreate, GroupMessageResponse
 from auth import get_current_user
 from config import get_settings
+from websocket import manager, notify_new_message
 
 router = APIRouter(prefix="/messages", tags=["消息"])
 
@@ -143,6 +144,16 @@ async def send_message(
     db.add(new_message)
     await db.flush()
     
+    # WebSocket 实时推送给用户
+    await notify_new_message(current_user.id, {
+        "id": new_message.id,
+        "contact_id": contact.id,
+        "content": new_message.content,
+        "message_type": new_message.message_type,
+        "is_from_owner": True,
+        "created_at": new_message.created_at.isoformat()
+    })
+    
     # 转发给 Agent（后台任务）
     background_tasks.add_task(
         forward_to_agent,
@@ -224,7 +235,15 @@ async def receive_message(
     db.add(new_message)
     await db.flush()
     
-    # TODO: 通过 WebSocket 推送给客户端
+    # 通过 WebSocket 推送给接收者
+    await notify_new_message(current_user.id, {
+        "id": new_message.id,
+        "contact_id": contact.id,
+        "content": new_message.content,
+        "message_type": new_message.message_type,
+        "is_from_owner": False,
+        "created_at": new_message.created_at.isoformat()
+    })
     
     return new_message
 
