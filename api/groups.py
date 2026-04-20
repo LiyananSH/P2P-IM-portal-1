@@ -404,8 +404,10 @@ async def receive_group_invite(
 ):
     """
     接收群邀请（跨 Portal 调用）
-    不需要认证，自动接受邀请
+    不需要认证，创建待处理邀请
     """
+    from models import GroupInvite
+    
     # 查找当前用户
     result = await db.execute(select(User).where(User.is_active == True).limit(1))
     current_user = result.scalar_one_or_none()
@@ -428,11 +430,106 @@ async def receive_group_invite(
             detail="Missing required fields"
         )
     
-    # 查找或创建联系人（邀请者）
+    # 检查是否已有待处理邀请
+    result = await db.execute(
+        select(GroupInvite).where(
+            and_(
+                GroupInvite.owner_id == current_user.id,
+                GroupInvite.group_id == group_id,
+                GroupInvite.inviter_portal == inviter_portal,
+                GroupInvite.status == "pending"
+            )
+        )
+    )
+    existing = result.scalar_one_or_none()
+    
+    if existing:
+        return {
+            "status": "success",
+            "message": "Invitation already exists"
+        }
+    
+    # 创建待处理邀请
+    invite = GroupInvite(
+        owner_id=current_user.id,
+        group_id=group_id,
+        group_name=group_name,
+        inviter_portal=inviter_portal,
+        shared_key=shared_key,
+        status="pending"
+    )
+    db.add(invite)
+    await db.flush()
+    
+    return {
+        "status": "success",
+        "message": "Invitation received"
+    }
+
+
+@router.get("/invites", response_model=List[dict])
+async def get_group_invites(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取收到的群邀请列表"""
+    from models import GroupInvite
+    
+    result = await db.execute(
+        select(GroupInvite).where(
+            and_(
+                GroupInvite.owner_id == current_user.id,
+                GroupInvite.status == "pending"
+            )
+        ).order_by(GroupInvite.created_at.desc())
+    )
+    invites = result.scalars().all()
+    
+    return [
+        {
+            "id": invite.id,
+            "group_id": invite.group_id,
+            "group_name": invite.group_name,
+            "inviter_portal": invite.inviter_portal,
+            "status": invite.status,
+            "created_at": invite.created_at.isoformat()
+        }
+        for invite in invites
+    ]
+
+
+@router.post("/invites/{invite_id}/accept", response_model=dict)
+async def accept_group_invite(
+    invite_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """接受群邀请"""
+    from models import GroupInvite
+    
+    # 查找邀请
+    result = await db.execute(
+        select(GroupInvite).where(
+            and_(
+                GroupInvite.id == invite_id,
+                GroupInvite.owner_id == current_user.id,
+                GroupInvite.status == "pending"
+            )
+        )
+    )
+    invite = result.scalar_one_or_none()
+    
+    if not invite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invitation not found"
+        )
+    
+    # 查找或创建联系人
     result = await db.execute(
         select(Contact).where(
             and_(
-                Contact.portal_url == inviter_portal,
+                Contact.portal_url == invite.inviter_portal,
                 Contact.is_active == True
             )
         )
@@ -440,12 +537,11 @@ async def receive_group_invite(
     contact = result.scalar_one_or_none()
     
     if not contact:
-        # 如果没有联系人记录，创建一个
         contact = Contact(
             owner_id=current_user.id,
-            display_name=f"用户-{inviter_portal.split('//')[1]}",
-            portal_url=inviter_portal,
-            shared_key=shared_key,
+            display_name=f"用户-{invite.inviter_portal.split('//')[1]}",
+            portal_url=invite.inviter_portal,
+            shared_key=invite.shared_key,
             is_active=True
         )
         db.add(contact)
@@ -455,7 +551,7 @@ async def receive_group_invite(
     result = await db.execute(
         select(Group).where(
             and_(
-                Group.id == group_id,
+                Group.id == invite.group_id,
                 Group.is_active == True
             )
         )
@@ -463,17 +559,16 @@ async def receive_group_invite(
     group = result.scalar_one_or_none()
     
     if not group:
-        # 创建新群组
         group = Group(
-            id=group_id,
+            id=invite.group_id,
             owner_id=current_user.id,
-            name=group_name,
+            name=invite.group_name,
             is_active=True
         )
         db.add(group)
         await db.flush()
     
-    # 添加成员关系到群组
+    # 添加成员关系
     try:
         await db.execute(
             group_members.insert().values(
@@ -483,8 +578,11 @@ async def receive_group_invite(
         )
         await db.flush()
     except Exception:
-        # 已存在，忽略错误
-        pass
+        pass  # 已存在
+    
+    # 更新邀请状态
+    invite.status = "accepted"
+    await db.flush()
     
     return {
         "status": "success",
@@ -494,20 +592,36 @@ async def receive_group_invite(
     }
 
 
-@router.post("/join", response_model=dict)
-async def join_group(
-    join_data: GroupJoin,
+@router.post("/invites/{invite_id}/reject", response_model=dict)
+async def reject_group_invite(
+    invite_id: int,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    接受群邀请，加入群组
-    1. 在本机创建群记录
-    2. 保存 shared_key
-    """
-    # TODO: 实现加入群组的逻辑
+    """拒绝群邀请"""
+    from models import GroupInvite
+    
+    result = await db.execute(
+        select(GroupInvite).where(
+            and_(
+                GroupInvite.id == invite_id,
+                GroupInvite.owner_id == current_user.id,
+                GroupInvite.status == "pending"
+            )
+        )
+    )
+    invite = result.scalar_one_or_none()
+    
+    if not invite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invitation not found"
+        )
+    
+    invite.status = "rejected"
+    await db.flush()
     
     return {
         "status": "success",
-        "message": "Joined group"
+        "message": "Invitation rejected"
     }
