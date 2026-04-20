@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, Table
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timedelta
 
 Base = declarative_base()
 
@@ -87,7 +87,7 @@ class Message(Base):
     file_size = Column(Integer)  # 文件大小（字节）
     is_from_owner = Column(Boolean, default=False)  # 是否来自主人（决定是否转发给 Agent）
     is_read = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=8))
     
     # 关系
     sender = relationship("User", back_populates="messages", foreign_keys=[sender_id])
@@ -108,7 +108,7 @@ class GroupMessage(Base):
     file_name = Column(String(255))
     file_size = Column(Integer)
     is_from_owner = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=8))
     
     # 关系
     group = relationship("Group", back_populates="messages")
