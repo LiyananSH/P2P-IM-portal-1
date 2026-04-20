@@ -333,6 +333,24 @@ async def invite_to_group(
     import secrets
     shared_key = f"group_{secrets.token_hex(32)}"
     
+    # 检查成员是否已在群组中
+    result = await db.execute(
+        select(group_members).where(
+            and_(
+                group_members.c.group_id == group.id,
+                group_members.c.contact_id == contact.id
+            )
+        )
+    )
+    existing = result.scalar_one_or_none()
+    
+    if existing:
+        return {
+            "status": "success",
+            "message": "Member already in group",
+            "shared_key": shared_key
+        }
+    
     # 简化实现：直接添加成员到群组
     # TODO: 后续实现跨 Portal 邀请
     try:
