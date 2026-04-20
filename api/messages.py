@@ -39,7 +39,9 @@ async def forward_to_agent(message_data: dict):
 
 async def send_to_contact_portal(contact: Contact, message_data: dict):
     """发送消息到对方 Portal"""
+    import logging
     try:
+        logging.info(f"Sending message to {contact.portal_url}, shared_key: {contact.shared_key[:20] if contact.shared_key else 'None'}")
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{contact.portal_url}/api/messages/receive",
@@ -56,8 +58,10 @@ async def send_to_contact_portal(contact: Contact, message_data: dict):
                 },
                 timeout=10.0
             )
+            logging.info(f"Message sent to {contact.portal_url}, status: {response.status_code}")
             return response.status_code == 200
-    except Exception:
+    except Exception as e:
+        logging.error(f"Failed to send message to {contact.portal_url}: {e}")
         return False
 
 
@@ -168,9 +172,9 @@ async def send_message(
         }
     )
     
-    # 发送到对方 Portal（后台任务）
-    background_tasks.add_task(
-        send_to_contact_portal,
+    # 发送到对方 Portal（同步执行，调试用）
+    import asyncio
+    await send_to_contact_portal(
         contact,
         {
             "sender_name": current_user.display_name or current_user.username,
@@ -408,6 +412,159 @@ async def send_group_message(
         }
     )
     
-    # TODO: 转发给群成员的其他 Portal
+    # 转发给群成员的其他 Portal
+    background_tasks.add_task(
+        forward_group_message,
+        group.id,
+        current_user,
+        {
+            "group_id": group.id,
+            "sender_name": current_user.display_name or "用户",
+            "content": message_data.content,
+            "message_type": message_data.message_type,
+            "created_at": new_message.created_at.isoformat()
+        },
+        db
+    )
     
     return new_message
+
+
+async def forward_group_message(group_id: int, sender: User, message_data: dict, db: AsyncSession):
+    """转发群消息到所有成员的 Portal"""
+    from models import group_members
+    
+    try:
+        # 获取群成员
+        result = await db.execute(
+            select(Contact).join(
+                group_members,
+                Contact.id == group_members.c.contact_id
+            ).where(
+                group_members.c.group_id == group_id
+            )
+        )
+        members = result.scalars().all()
+        
+        settings = get_settings()
+        
+        async with httpx.AsyncClient() as client:
+            for member in members:
+                # 跳过发送者自己
+                if member.portal_url == settings.PORTAL_URL:
+                    continue
+                
+                try:
+                    await client.post(
+                        f"{member.portal_url}/api/messages/group/receive",
+                        json={
+                            "from_portal": settings.PORTAL_URL,
+                            "group_id": group_id,
+                            "sender_name": message_data["sender_name"],
+                            "content": message_data["content"],
+                            "message_type": message_data["message_type"],
+                            "timestamp": message_data["created_at"],
+                            "signature": member.shared_key
+                        },
+                        timeout=10.0
+                    )
+                except Exception as e:
+                    print(f"Failed to forward to {member.portal_url}: {e}")
+                    
+    except Exception as e:
+        print(f"Forward group message error: {e}")
+
+
+@router.post("/group/receive", response_model=dict)
+async def receive_group_message(
+    message_data: dict,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    接收来自其他 Portal 的群消息
+    跨 Portal 调用，用 shared_key 验证
+    """
+    from_portal = message_data.get("from_portal")
+    group_id = message_data.get("group_id")
+    signature = message_data.get("signature")
+    
+    if not all([from_portal, group_id, signature]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing required fields"
+        )
+    
+    # 查找对应的联系人（通过 portal_url）
+    result = await db.execute(
+        select(Contact).where(
+            and_(
+                Contact.portal_url == from_portal,
+                Contact.is_active == True
+            )
+        )
+    )
+    contact = result.scalar_one_or_none()
+    
+    if not contact or contact.shared_key != signature:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid signature"
+        )
+    
+    # 查找当前用户
+    result = await db.execute(select(User).where(User.is_active == True).limit(1))
+    current_user = result.scalar_one_or_none()
+    
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active user"
+        )
+    
+    # 查找或创建群记录
+    result = await db.execute(
+        select(Group).where(
+            and_(
+                Group.id == group_id,
+                Group.is_active == True
+            )
+        )
+    )
+    group = result.scalar_one_or_none()
+    
+    if not group:
+        # 如果群不存在，创建一个新群（简化处理）
+        group = Group(
+            id=group_id,
+            owner_id=current_user.id,
+            name=f"群-{group_id}",
+            is_active=True
+        )
+        db.add(group)
+        await db.flush()
+    
+    # 创建群消息
+    new_message = GroupMessage(
+        group_id=group.id,
+        sender_id=current_user.id,  # 用当前用户占位
+        sender_name=message_data.get("sender_name", "未知"),
+        content=message_data.get("content"),
+        message_type=message_data.get("message_type", "text"),
+        is_from_owner=False
+    )
+    
+    db.add(new_message)
+    await db.flush()
+    
+    # 通过 WebSocket 通知用户
+    await notify_new_message(current_user.id, {
+        "id": new_message.id,
+        "group_id": group.id,
+        "sender_name": new_message.sender_name,
+        "content": new_message.content,
+        "message_type": new_message.message_type,
+        "is_from_owner": False,
+        "created_at": new_message.created_at.isoformat()
+    })
+    
+    return {"status": "success"}
