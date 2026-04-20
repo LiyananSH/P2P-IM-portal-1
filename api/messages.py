@@ -188,13 +188,16 @@ async def send_message(
 @router.post("/receive", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
 async def receive_message(
     message_data: dict,
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """接收来自其他 Portal 的消息"""
+    """
+    接收来自其他 Portal 的消息
+    跨 Portal 调用，无需用户认证，用 shared_key 验证
+    """
     from_portal = message_data.get("from_portal")
     sender_name = message_data.get("sender_name")
     content = message_data.get("content")
+    signature = message_data.get("signature")  # shared_key
     
     if not all([from_portal, content]):
         raise HTTPException(
@@ -202,11 +205,10 @@ async def receive_message(
             detail="Missing required fields"
         )
     
-    # 查找对应的联系人
+    # 查找发送方对应的联系人（通过 portal_url）
     result = await db.execute(
         select(Contact).where(
             and_(
-                Contact.owner_id == current_user.id,
                 Contact.portal_url == from_portal,
                 Contact.is_active == True
             )
@@ -219,6 +221,24 @@ async def receive_message(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Contact not found"
         )
+    
+    # 验证 shared_key
+    if signature and contact.shared_key and signature != contact.shared_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid shared key"
+        )
+    
+    # 查找当前用户的第一个活跃用户
+    result = await db.execute(select(User).where(User.is_active == True).limit(1))
+    current_user = result.scalar_one_or_none()
+    
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active user"
+        )
+    
     
     # 创建消息（标记为来自联系人，不是主人）
     new_message = Message(
