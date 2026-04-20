@@ -90,6 +90,30 @@ class GroupMemberAdd(BaseModel):
     contact_ids: List[int]
 
 
+class GroupInvite(BaseModel):
+    """发送群邀请"""
+    group_id: int
+    contact_id: int  # 被邀请的联系人ID
+
+
+class GroupInviteResponse(BaseModel):
+    """群邀请响应"""
+    id: int
+    group_id: int
+    inviter_portal: str
+    group_name: str
+    shared_key: str  # 用于验证群消息
+    status: str  # pending, accepted, rejected
+    created_at: datetime
+
+
+class GroupJoin(BaseModel):
+    """接受群邀请"""
+    invite_id: int
+    group_name: str
+    shared_key: str
+
+
 class GroupResponse(GroupBase):
     id: int
     owner_id: int
