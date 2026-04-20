@@ -120,15 +120,15 @@ class MessageCreate(MessageBase):
 class MessageResponse(MessageBase):
     id: int
     sender_id: int
-    sender_name: Optional[str]
-    contact_id: Optional[int]
-    group_id: Optional[int]
-    file_url: Optional[str]
-    file_name: Optional[str]
-    file_size: Optional[int]
-    is_from_owner: bool
-    is_read: bool
-    created_at: datetime
+    sender_name: Optional[str] = None
+    contact_id: Optional[int] = None
+    group_id: Optional[int] = None
+    file_url: Optional[str] = None
+    file_name: Optional[str] = None
+    file_size: Optional[int] = None
+    is_from_owner: bool = False
+    is_read: bool = False
+    created_at: Optional[datetime] = None
     
     class Config:
         from_attributes = True
