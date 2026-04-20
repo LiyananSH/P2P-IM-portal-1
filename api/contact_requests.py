@@ -19,6 +19,39 @@ def generate_shared_key() -> str:
     return f"shared_{uuid.uuid4().hex}"
 
 
+async def forward_apply_request(request_data: ContactRequestCreate) -> dict:
+    """
+    转发申请到目标 Portal
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{request_data.target_portal}/api/contact-requests/apply",
+                json={
+                    "target_portal": request_data.target_portal,
+                    "requester_name": request_data.requester_name,
+                    "requester_portal": request_data.requester_portal,
+                    "requester_public_key": request_data.requester_public_key,
+                    "shared_key": request_data.shared_key,
+                    "message": request_data.message
+                },
+                timeout=10.0
+            )
+            
+            if response.status_code == 201:
+                return response.json()
+            else:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Target portal error: {response.text}"
+                )
+    except httpx.RequestError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Cannot reach target portal: {str(e)}"
+        )
+
+
 # ========== 公开接口：任何人可以申请添加 ==========
 
 @router.post("/apply", response_model=dict, status_code=status.HTTP_201_CREATED)
@@ -29,17 +62,16 @@ async def apply_contact(
 ):
     """
     匿名申请添加联系人
-    申请方需要提供 shared_key，用于双方通信认证
+    如果 target_portal 不是本机，转发请求到对方 Portal
     """
     settings = get_settings()
-    
-    # 验证目标 Portal 是否是自己
     target_portal = request_data.target_portal
+    
+    # 如果目标不是本机，转发请求
     if target_portal != settings.PORTAL_URL:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Target portal mismatch"
-        )
+        return await forward_apply_request(request_data)
+    
+    # 以下处理发向本机的申请
     
     # 申请方必须提供 shared_key
     if not request_data.shared_key:
