@@ -32,6 +32,7 @@ class User(Base):
     contacts = relationship("Contact", back_populates="owner", cascade="all, delete-orphan")
     messages = relationship("Message", back_populates="sender", foreign_keys="Message.sender_id")
     groups = relationship("Group", back_populates="owner", cascade="all, delete-orphan")
+    group_invites = relationship("GroupInvite", back_populates="owner", cascade="all, delete-orphan")
 
 
 class Contact(Base):
@@ -59,6 +60,8 @@ class Group(Base):
     __tablename__ = "groups"
     
     id = Column(Integer, primary_key=True, index=True)
+    # 全局唯一 group_id，用于跨 Portal 识别
+    group_id = Column(String(255), unique=True, index=True, nullable=False)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String(100), nullable=False)
     description = Column(Text)
@@ -102,6 +105,7 @@ class GroupMessage(Base):
     group_id = Column(Integer, ForeignKey("groups.id"), nullable=False)
     sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # 本地用户 ID
     sender_name = Column(String(100))  # 发送者显示名（用于跨 Portal 显示）
+    sender_portal = Column(String(255))  # 发送者 Portal URL
     content = Column(Text, nullable=False)
     message_type = Column(String(20), default="text")
     file_url = Column(String(500))
@@ -152,5 +156,29 @@ class ContactRequest(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
+    # 关系
+    owner = relationship("User", foreign_keys=[owner_id])
+
+
+class GroupInvite(Base):
+    """群邀请表"""
+    __tablename__ = "group_invites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # 被邀请者
+
+    # 群组信息
+    group_id = Column(String(255), nullable=False)  # 全局群组ID（跨Portal）
+    group_name = Column(String(100), nullable=False)
+    inviter_portal = Column(String(255), nullable=False)  # 邀请者 Portal
+
+    # 验证信息
+    shared_key = Column(String(255), nullable=False)  # 群消息验证密钥
+
+    status = Column(String(20), default="pending")  # pending, accepted, rejected
+
+    created_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=8))
+    updated_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=8), onupdate=lambda: datetime.utcnow() + timedelta(hours=8))
+
     # 关系
     owner = relationship("User", foreign_keys=[owner_id])

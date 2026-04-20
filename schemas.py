@@ -92,7 +92,7 @@ class GroupMemberAdd(BaseModel):
 
 class GroupInvite(BaseModel):
     """发送群邀请"""
-    group_id: int
+    group_id: int  # 本地数据库 group.id
     contact_id: int  # 被邀请的联系人ID
 
 
@@ -116,6 +116,7 @@ class GroupJoin(BaseModel):
 
 class GroupResponse(GroupBase):
     id: int
+    group_id: str  # 全局唯一 group_id
     owner_id: int
     avatar: Optional[str]
     is_active: bool

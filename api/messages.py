@@ -359,17 +359,25 @@ async def list_group_messages(
 @router.post("/group", response_model=GroupMessageResponse, status_code=status.HTTP_201_CREATED)
 async def send_group_message(
     message_data: GroupMessageCreate,
+    request: Request,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """发送群聊消息"""
+    """
+    发送群聊消息
+    验证：1. sender portal 在成员列表中 2. 消息签名有效
+    """
+    settings = get_settings()
+    
+    # 获取 sender portal（从请求头或当前用户）
+    sender_portal = request.headers.get("X-Sender-Portal", settings.PORTAL_URL)
+    
     # 验证群组
     result = await db.execute(
         select(Group).where(
             and_(
                 Group.id == message_data.group_id,
-                Group.owner_id == current_user.id,
                 Group.is_active == True
             )
         )
@@ -382,11 +390,34 @@ async def send_group_message(
             detail="Group not found"
         )
     
+    # 验证 sender 在群成员列表中
+    result = await db.execute(
+        select(group_members).where(
+            and_(
+                group_members.c.group_id == message_data.group_id,
+                group_members.c.contact_id.in_(
+                    select(Contact.id).where(
+                        and_(
+                            Contact.portal_url == sender_portal,
+                            Contact.is_active == True
+                        )
+                    )
+                )
+            )
+        )
+    )
+    if not result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sender not in group members"
+        )
+    
     # 创建群消息
     new_message = GroupMessage(
         group_id=group.id,
         sender_id=current_user.id,
-        sender_name=current_user.display_name or current_user.username,
+        sender_name=current_user.display_name or "用户",
+        sender_portal=sender_portal,
         content=message_data.content,
         message_type=message_data.message_type,
         file_url=message_data.file_url,
@@ -398,27 +429,16 @@ async def send_group_message(
     db.add(new_message)
     await db.flush()
     
-    # 转发给 Agent（后台任务）
-    background_tasks.add_task(
-        forward_to_agent,
-        {
-            "message_id": new_message.id,
-            "type": "group",
-            "group_id": group.id,
-            "group_name": group.name,
-            "content": new_message.content,
-            "message_type": new_message.message_type,
-            "created_at": new_message.created_at.isoformat()
-        }
-    )
-    
-    # 转发给群成员的其他 Portal
+    # 转发给群成员的其他 Portal（使用全局 group_id）
     background_tasks.add_task(
         forward_group_message,
         group.id,
-        current_user,
+        group.group_id,  # 传递全局 group_id
+        sender_portal,
+        current_user.display_name or "用户",
         {
-            "group_id": group.id,
+            "group_id": group.group_id,  # 使用全局 group_id
+            "sender_portal": sender_portal,
             "sender_name": current_user.display_name or "用户",
             "content": message_data.content,
             "message_type": message_data.message_type,
@@ -430,18 +450,18 @@ async def send_group_message(
     return new_message
 
 
-async def forward_group_message(group_id: int, sender: User, message_data: dict, db: AsyncSession):
+async def forward_group_message(group_db_id: int, group_id: str, sender_portal: str, sender_name: str, message_data: dict, db: AsyncSession):
     """转发群消息到所有成员的 Portal"""
     from models import group_members
     
     try:
-        # 获取群成员
+        # 获取群成员（使用 group_db_id 查询数据库）
         result = await db.execute(
             select(Contact).join(
                 group_members,
                 Contact.id == group_members.c.contact_id
             ).where(
-                group_members.c.group_id == group_id
+                group_members.c.group_id == group_db_id
             )
         )
         members = result.scalars().all()
@@ -451,20 +471,28 @@ async def forward_group_message(group_id: int, sender: User, message_data: dict,
         async with httpx.AsyncClient() as client:
             for member in members:
                 # 跳过发送者自己
-                if member.portal_url == settings.PORTAL_URL:
+                if member.portal_url == sender_portal:
                     continue
                 
                 try:
+                    # 用 shared_key 签名消息
+                    import hashlib
+                    message_str = f"{group_id}:{sender_portal}:{message_data['content']}:{message_data['created_at']}"
+                    signature = hashlib.sha256(f"{message_str}:{member.shared_key}".encode()).hexdigest()
+                    
                     await client.post(
                         f"{member.portal_url}/api/messages/group/receive",
                         json={
-                            "from_portal": settings.PORTAL_URL,
                             "group_id": group_id,
-                            "sender_name": message_data["sender_name"],
+                            "sender_portal": sender_portal,
+                            "sender_name": sender_name,
                             "content": message_data["content"],
                             "message_type": message_data["message_type"],
                             "timestamp": message_data["created_at"],
-                            "signature": member.shared_key
+                            "signature": signature
+                        },
+                        headers={
+                            "X-Sender-Portal": sender_portal
                         },
                         timeout=10.0
                     )
@@ -478,37 +506,22 @@ async def forward_group_message(group_id: int, sender: User, message_data: dict,
 @router.post("/group/receive", response_model=dict)
 async def receive_group_message(
     message_data: dict,
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
     接收来自其他 Portal 的群消息
-    跨 Portal 调用，用 shared_key 验证
+    验证：1. sender portal 在成员列表中 2. 签名有效
     """
-    from_portal = message_data.get("from_portal")
+    sender_portal = message_data.get("sender_portal") or request.headers.get("X-Sender-Portal")
     group_id = message_data.get("group_id")
     signature = message_data.get("signature")
+    timestamp = message_data.get("timestamp")
     
-    if not all([from_portal, group_id, signature]):
+    if not all([sender_portal, group_id, signature, timestamp]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing required fields"
-        )
-    
-    # 查找对应的联系人（通过 portal_url）
-    result = await db.execute(
-        select(Contact).where(
-            and_(
-                Contact.portal_url == from_portal,
-                Contact.is_active == True
-            )
-        )
-    )
-    contact = result.scalar_one_or_none()
-    
-    if not contact or contact.shared_key != signature:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid signature"
         )
     
     # 查找当前用户
@@ -521,11 +534,11 @@ async def receive_group_message(
             detail="No active user"
         )
     
-    # 查找或创建群记录
+    # 查找群（使用全局 group_id）
     result = await db.execute(
         select(Group).where(
             and_(
-                Group.id == group_id,
+                Group.group_id == group_id,
                 Group.is_active == True
             )
         )
@@ -533,22 +546,51 @@ async def receive_group_message(
     group = result.scalar_one_or_none()
     
     if not group:
-        # 如果群不存在，创建一个新群（简化处理）
-        group = Group(
-            id=group_id,
-            owner_id=current_user.id,
-            name=f"群-{group_id}",
-            is_active=True
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Group not found"
         )
-        db.add(group)
-        await db.flush()
+    
+    # 验证 sender 在群成员列表中
+    result = await db.execute(
+        select(Contact).join(
+            group_members,
+            Contact.id == group_members.c.contact_id
+        ).where(
+            and_(
+                group_members.c.group_id == group.id,  # 使用 group.id（数据库ID）
+                Contact.portal_url == sender_portal,
+                Contact.is_active == True
+            )
+        )
+    )
+    contact = result.scalar_one_or_none()
+    
+    if not contact:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sender not in group members"
+        )
+    
+    # 验证签名
+    import hashlib
+    content = message_data.get("content", "")
+    message_str = f"{group_id}:{sender_portal}:{content}:{timestamp}"
+    expected_signature = hashlib.sha256(f"{message_str}:{contact.shared_key}".encode()).hexdigest()
+    
+    if signature != expected_signature:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid signature"
+        )
     
     # 创建群消息
     new_message = GroupMessage(
         group_id=group.id,
-        sender_id=current_user.id,  # 用当前用户占位
+        sender_id=current_user.id,
         sender_name=message_data.get("sender_name", "未知"),
-        content=message_data.get("content"),
+        sender_portal=sender_portal,
+        content=content,
         message_type=message_data.get("message_type", "text"),
         is_from_owner=False
     )

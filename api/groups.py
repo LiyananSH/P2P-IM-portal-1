@@ -29,6 +29,7 @@ async def list_groups(
     return [
         {
             "id": g.id,
+            "group_id": g.group_id,
             "owner_id": g.owner_id,
             "name": g.name,
             "description": g.description,
@@ -48,8 +49,16 @@ async def create_group(
     db: AsyncSession = Depends(get_db)
 ):
     """创建群组"""
+    from config import get_settings
+    settings = get_settings()
+    
+    # 生成全局唯一 group_id
+    import time
+    global_group_id = f"group-{int(time.time())}-{settings.PORTAL_URL.replace('https://', '').replace('http://', '').replace('/', '_')}"
+    
     # 创建群组
     new_group = Group(
+        group_id=global_group_id,
         owner_id=current_user.id,
         name=group_data.name,
         description=group_data.description
@@ -85,6 +94,7 @@ async def create_group(
     # 手动构造返回数据，避免 SQLAlchemy 异步关系加载问题
     return {
         "id": new_group.id,
+        "group_id": new_group.group_id,
         "owner_id": new_group.owner_id,
         "name": new_group.name,
         "description": new_group.description,
@@ -354,7 +364,7 @@ async def invite_to_group(
             response = await client.post(
                 f"{contact.portal_url}/api/groups/invite/receive",
                 json={
-                    "group_id": group.id,
+                    "group_id": group.group_id,  # 使用全局 group_id
                     "group_name": group.name,
                     "inviter_portal": settings.PORTAL_URL,
                     "shared_key": shared_key,
@@ -550,11 +560,11 @@ async def accept_group_invite(
         db.add(contact)
         await db.flush()
     
-    # 查找或创建群组
+    # 查找或创建群组（使用全局 group_id）
     result = await db.execute(
         select(Group).where(
             and_(
-                Group.id == invite.group_id,
+                Group.group_id == invite.group_id,
                 Group.is_active == True
             )
         )
@@ -562,8 +572,9 @@ async def accept_group_invite(
     group = result.scalar_one_or_none()
     
     if not group:
+        # 创建新群组，使用全局 group_id
         group = Group(
-            id=invite.group_id,
+            group_id=invite.group_id,
             owner_id=current_user.id,
             name=invite.group_name,
             is_active=True
