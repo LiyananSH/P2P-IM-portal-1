@@ -370,14 +370,15 @@ async def notify_requester_approved(
     shared_key: str
 ):
     """通知申请者请求已批准"""
+    import logging
     settings = get_settings()
     
     try:
         async with httpx.AsyncClient() as client:
-            await client.post(
+            response = await client.post(
                 f"{request.requester_portal}/api/contact-requests/callback/approved",
                 json={
-                    "target_portal": settings.PORTAL_URL,
+                    "target_portal": request.requester_portal,
                     "approver_portal": settings.PORTAL_URL,
                     "approver_name": approver.display_name or approver.username,
                     "shared_key": shared_key,
@@ -385,9 +386,9 @@ async def notify_requester_approved(
                 },
                 timeout=10.0
             )
+            logging.info(f"Callback sent to {request.requester_portal}, status: {response.status_code}")
     except Exception as e:
-        # 通知失败不影响主流程
-        print(f"Failed to notify requester: {e}")
+        logging.error(f"Failed to notify requester: {e}")
 
 
 async def notify_requester_rejected(request: ContactRequest):
