@@ -344,15 +344,11 @@ async def invite_to_group(
     )
     existing = result.scalar_one_or_none()
     
-    if existing:
-        return {
-            "status": "success",
-            "message": "Member already in group",
-            "shared_key": shared_key
-        }
-    
-    # 跨 Portal 发送邀请
+    # 跨 Portal 发送邀请（即使成员已在本地群组中，也要通知对方）
+    print(f"[INVITE] Member existing check: {existing is not None}")
     settings = get_settings()
+    print(f"[INVITE] Sending invite to {contact.portal_url}/api/groups/invite/receive")
+    print(f"[INVITE] Group: {group.id}, Contact: {contact.id}, Portal: {contact.portal_url}")
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -366,16 +362,21 @@ async def invite_to_group(
                 },
                 timeout=10.0
             )
+            print(f"[INVITE] Response status: {response.status_code}")
+            print(f"[INVITE] Response body: {response.text}")
             
             if response.status_code == 200:
-                # 对方接受邀请后，添加成员到群组
-                await db.execute(
-                    group_members.insert().values(
-                        group_id=group.id,
-                        contact_id=contact.id
+                # 对方接受邀请后，添加成员到群组（如果还没有）
+                try:
+                    await db.execute(
+                        group_members.insert().values(
+                            group_id=group.id,
+                            contact_id=contact.id
+                        )
                     )
-                )
-                await db.flush()
+                    await db.flush()
+                except Exception as e:
+                    print(f"[INVITE] Member already exists or insert error: {e}")
                 
                 return {
                     "status": "success",
@@ -389,7 +390,9 @@ async def invite_to_group(
                     "message": "Invitation sent, waiting for acceptance"
                 }
     except Exception as e:
-        print(f"Failed to send invitation: {e}")
+        print(f"[INVITE] Failed to send invitation: {e}")
+        import traceback
+        traceback.print_exc()
         # 发送失败，返回错误
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
