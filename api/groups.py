@@ -333,46 +333,26 @@ async def invite_to_group(
     import secrets
     shared_key = f"group_{secrets.token_hex(32)}"
     
-    # 发送邀请到对方 Portal
-    settings = get_settings()
+    # 简化实现：直接添加成员到群组
+    # TODO: 后续实现跨 Portal 邀请
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{contact.portal_url}/api/groups/invite/receive",
-                json={
-                    "group_id": group.id,
-                    "group_name": group.name,
-                    "inviter_portal": settings.PORTAL_URL,
-                    "shared_key": shared_key,
-                    "timestamp": datetime.utcnow().isoformat()
-                },
-                timeout=10.0
+        await db.execute(
+            group_members.insert().values(
+                group_id=group.id,
+                contact_id=contact.id
             )
-            
-            if response.status_code == 200:
-                # 添加成员到群组（标记为待接受）
-                await db.execute(
-                    group_members.insert().values(
-                        group_id=group.id,
-                        contact_id=contact.id
-                    )
-                )
-                await db.flush()
-                
-                return {
-                    "status": "success",
-                    "message": "Invitation sent",
-                    "shared_key": shared_key
-                }
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to send invitation"
-                )
+        )
+        await db.flush()
+        
+        return {
+            "status": "success",
+            "message": "Member added",
+            "shared_key": shared_key
+        }
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to send invitation: {str(e)}"
+            detail=f"Failed to add member: {str(e)}"
         )
 
 
