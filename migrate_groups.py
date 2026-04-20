@@ -27,9 +27,10 @@ def migrate():
         portal_url = row[0] if row else 'unknown'
         portal_domain = portal_url.replace('https://', '').replace('http://', '').replace('/', '_')
         
-        for group in groups:
+        for i, group in enumerate(groups):
             group_id, name = group
-            global_id = f"group-{int(time.time())}-{portal_domain}"
+            # 使用时间戳 + 序号确保唯一
+            global_id = f"group-{int(time.time())}-{i}-{portal_domain}"
             c.execute("UPDATE groups SET group_id = ? WHERE id = ?", (global_id, group_id))
             print(f"  Group {group_id} ({name}) -> {global_id}")
         
