@@ -15,7 +15,7 @@ def migrate():
     
     if 'group_id' not in columns:
         print("添加 group_id 列...")
-        c.execute("ALTER TABLE groups ADD COLUMN group_id TEXT UNIQUE")
+        c.execute("ALTER TABLE groups ADD COLUMN group_id TEXT")
         
         # 为现有群组生成 group_id
         c.execute("SELECT id, name FROM groups WHERE group_id IS NULL")
@@ -29,7 +29,7 @@ def migrate():
         
         for group in groups:
             group_id, name = group
-            global_id = f"group-{int(time.time())}-{group_id}-{portal_domain}"
+            global_id = f"group-{int(time.time())}-{portal_domain}"
             c.execute("UPDATE groups SET group_id = ? WHERE id = ?", (global_id, group_id))
             print(f"  Group {group_id} ({name}) -> {global_id}")
         
