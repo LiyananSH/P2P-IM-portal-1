@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 
 from database import get_db
-from models import User, Group, Contact
+from models import User, Group, Contact, group_members
 from schemas import GroupCreate, GroupUpdate, GroupResponse, GroupMemberAdd
 from auth import get_current_user
 
