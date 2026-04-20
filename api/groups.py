@@ -57,7 +57,13 @@ async def create_group(
             )
             contact = result.scalar_one_or_none()
             if contact:
-                new_group.members.append(contact)
+                # 使用原生 SQL 插入关联表
+                await db.execute(
+                    group_members.insert().values(
+                        group_id=new_group.id,
+                        contact_id=contact.id
+                    )
+                )
         
         await db.flush()
     
