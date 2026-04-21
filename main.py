@@ -9,7 +9,9 @@ from auth import get_current_user
 from websocket import handle_websocket
 
 # 导入 API 路由
-from api import auth, contacts, groups, messages, files, contact_requests, group_sync
+from api import auth, contacts, groups, messages, files, contact_requests
+from api.group_sync import router as group_sync_router
+from api.group_p2p import router as group_p2p_router
 
 
 @asynccontextmanager
@@ -48,7 +50,8 @@ app.include_router(groups.router, prefix="/api")
 app.include_router(messages.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(contact_requests.router, prefix="/api")
-app.include_router(group_sync.router, prefix="/api")
+app.include_router(group_sync_router, prefix="/api")
+app.include_router(group_p2p_router, prefix="/api")
 
 
 @app.get("/")

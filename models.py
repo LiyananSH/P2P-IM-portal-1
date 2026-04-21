@@ -62,6 +62,8 @@ class Group(Base):
     id = Column(Integer, primary_key=True, index=True)
     # 全局唯一 group_id，用于跨 Portal 识别
     group_id = Column(String(255), unique=True, index=True, nullable=False)
+    # 群共享密钥，用于签名验证
+    group_key = Column(String(255), nullable=False)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     name = Column(String(100), nullable=False)
     description = Column(Text)

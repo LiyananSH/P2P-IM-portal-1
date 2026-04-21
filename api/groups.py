@@ -61,8 +61,13 @@ async def create_group(
     portal_domain = settings.PORTAL_URL.replace('https://', '').replace('http://', '')
     global_group_id = f"group-{timestamp}-{portal_domain}"
     
+    # 生成群共享密钥
+    import secrets
+    group_key = f"gk_{secrets.token_hex(32)}"
+    
     new_group = Group(
         group_id=global_group_id,
+        group_key=group_key,
         owner_id=current_user.id,
         name=group_data.name,
         description=group_data.description
@@ -96,6 +101,7 @@ async def create_group(
     return {
         "id": new_group.id,
         "group_id": new_group.group_id,
+        "group_key": new_group.group_key,
         "owner_id": new_group.owner_id,
         "name": new_group.name,
         "description": new_group.description,
