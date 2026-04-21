@@ -1016,3 +1016,101 @@ async def receive_group_accept(
         "group_key": group.group_key,
         "members": member_list
     }
+
+
+# ========== 9. 成员发送群消息（通过 UUID）==========
+
+@router.post("/by-uuid/{group_uuid}/messages/send")
+async def send_message_by_uuid(
+    group_uuid: str,
+    message_data: dict,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    成员发送群消息（使用 UUID）
+    从本地缓存获取成员列表，P2P发送给所有人
+    """
+    from models import GroupMemberCache, GroupMessage
+    from datetime import datetime
+    import json
+    
+    settings = get_settings()
+    sender_portal = settings.PORTAL_URL
+    
+    # 从缓存获取群信息
+    result = await db.execute(
+        select(GroupMemberCache).where(
+            GroupMemberCache.group_id == group_uuid
+        )
+    )
+    cache = result.scalar_one_or_none()
+    
+    if not cache:
+        raise HTTPException(status_code=404, detail="Group not found in cache")
+    
+    # 验证发送者在成员列表中
+    members = json.loads(cache.members_json) if cache.members_json else []
+    member_portals = [m.get("portal") for m in members]
+    
+    if sender_portal not in member_portals:
+        raise HTTPException(status_code=403, detail="Sender not in group members")
+    
+    # 构建消息
+    content = message_data.get("content", "")
+    timestamp = datetime.utcnow().isoformat()
+    signature = sign_message(content, timestamp, cache.group_key)
+    
+    message_payload = {
+        "group_id": group_uuid,
+        "sender_portal": sender_portal,
+        "sender_name": current_user.display_name or "用户",
+        "content": content,
+        "message_type": message_data.get("message_type", "text"),
+        "timestamp": timestamp,
+        "signature": signature
+    }
+    
+    # 存储本地消息
+    new_message = GroupMessage(
+        group_uuid=group_uuid,
+        sender_id=current_user.id,
+        sender_name=current_user.display_name or "用户",
+        sender_portal=sender_portal,
+        content=content,
+        message_type=message_data.get("message_type", "text"),
+        is_from_owner=False
+    )
+    db.add(new_message)
+    await db.flush()
+    
+    # P2P 发送给所有成员
+    success_count = 0
+    failed_members = []
+    
+    for member in members:
+        if member.get("portal") == sender_portal:
+            continue  # 跳过自己
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{member.get('portal')}/api/groups/receive/{group_uuid}",
+                    json=message_payload,
+                    timeout=10.0
+                )
+                if response.status_code == 200:
+                    success_count += 1
+                else:
+                    failed_members.append(member.get("portal"))
+        except Exception as e:
+            print(f"Failed to send to {member.get('portal')}: {e}")
+            failed_members.append(member.get("portal"))
+    
+    return {
+        "status": "success",
+        "message_id": new_message.id,
+        "success_count": success_count,
+        "failed": failed_members,
+        "total_members": len(members)
+    }
