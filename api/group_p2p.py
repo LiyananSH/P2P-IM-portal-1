@@ -124,14 +124,18 @@ async def get_my_groups(
 @router.post("/{group_id}/register-portal")
 async def register_member_portal(
     group_id: int,
-    current_user: User = Depends(get_current_user),
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
     成员注册自己的 portal，用于接收群列表更新
     返回当前成员列表 + group_key（用于签名验证）
+    支持外部 Portal 调用（通过 X-Sender-Portal 头）
     """
     settings = get_settings()
+    
+    # 获取调用者 portal（从 header 或当前用户）
+    sender_portal = request.headers.get("X-Sender-Portal")
     
     # 获取群信息
     result = await db.execute(
@@ -147,35 +151,43 @@ async def register_member_portal(
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
     
-    # 检查是否是群主或群成员
-    is_owner = group.owner_id == current_user.id
-    
-    # 如果不是群主，检查是否是群成员
-    if not is_owner:
+    # 验证调用者是否是合法的群成员（通过检查邀请）
+    if sender_portal:
+        # 外部调用：验证对方有待接受的邀请
+        from models import GroupInvite
         result = await db.execute(
-            select(Contact).where(
+            select(GroupInvite).where(
                 and_(
-                    Contact.owner_id == current_user.id,
-                    Contact.is_active == True
+                    GroupInvite.group_id == group.group_id,
+                    GroupInvite.invitee_portal == sender_portal,
+                    GroupInvite.status == "pending"
                 )
             )
         )
-        contact = result.scalar_one_or_none()
-        
-        if not contact:
-            raise HTTPException(status_code=403, detail="Not a group member")
-        
-        # 检查是否已在 group_members
-        result = await db.execute(
-            select(group_members).where(
-                and_(
-                    group_members.c.group_id == group_id,
-                    group_members.c.contact_id == contact.id
+        invite = result.scalar_one_or_none()
+        if not invite:
+            # 也可能是已经是成员了（重新注册）
+            result = await db.execute(
+                select(Contact).join(
+                    group_members,
+                    Contact.id == group_members.c.contact_id
+                ).where(
+                    and_(
+                        group_members.c.group_id == group_id,
+                        Contact.portal_url == sender_portal
+                    )
                 )
             )
-        )
-        if not result.scalar_one_or_none():
-            raise HTTPException(status_code=403, detail="Not in this group")
+            member = result.scalar_one_or_none()
+            if not member:
+                raise HTTPException(status_code=403, detail="No pending invitation")
+    else:
+        # 内部调用：需要用户认证
+        from auth import get_current_user
+        current_user = await get_current_user(db=db)
+        is_owner = group.owner_id == current_user.id
+        if not is_owner:
+            raise HTTPException(status_code=403, detail="Not group owner")
     
     # 获取成员列表
     result = await db.execute(
