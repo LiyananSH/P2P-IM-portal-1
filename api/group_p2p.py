@@ -869,3 +869,139 @@ async def receive_group_list_update(
     
     await db.flush()
     return {"status": "success", "version": version}
+
+
+# ========== 8. 接收成员接受通知（Webhook）==========
+
+@router.post("/webhook/group-accept")
+async def receive_group_accept(
+    accept_data: dict,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    接收成员接受邀请的通知
+    群主端：添加成员并广播
+    """
+    from models import Group, Contact, GroupInvite
+    
+    group_id = accept_data.get("group_id")
+    invitee_portal = accept_data.get("invitee_portal")
+    invitee_name = accept_data.get("invitee_name", "用户")
+    
+    if not all([group_id, invitee_portal]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    
+    # 查找群组
+    result = await db.execute(
+        select(Group).where(
+            and_(
+                Group.group_id == group_id,
+                Group.is_active == True
+            )
+        )
+    )
+    group = result.scalar_one_or_none()
+    
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # 查找或创建联系人
+    result = await db.execute(
+        select(Contact).where(
+            and_(
+                Contact.portal_url == invitee_portal,
+                Contact.is_active == True
+            )
+        )
+    )
+    contact = result.scalar_one_or_none()
+    
+    if not contact:
+        contact = Contact(
+            owner_id=group.owner_id,
+            display_name=invitee_name,
+            portal_url=invitee_portal,
+            is_active=True
+        )
+        db.add(contact)
+        await db.flush()
+    
+    # 添加成员关系
+    try:
+        await db.execute(
+            group_members.insert().values(
+                group_id=group.id,
+                contact_id=contact.id
+            )
+        )
+        await db.flush()
+    except Exception as e:
+        print(f"Member already exists: {e}")
+    
+    # 获取更新后的成员列表
+    result = await db.execute(
+        select(Contact).join(
+            group_members,
+            Contact.id == group_members.c.contact_id
+        ).where(
+            group_members.c.group_id == group.id
+        )
+    )
+    members_result = result.scalars().all()
+    member_list = [{"portal": m.portal_url, "display_name": m.display_name} for m in members_result]
+    
+    # 加入群主
+    result = await db.execute(select(User).where(User.id == group.owner_id))
+    owner = result.scalar_one_or_none()
+    member_list.insert(0, {
+        "portal": owner.portal_url if owner else "",
+        "display_name": owner.display_name if owner else "群主"
+    })
+    
+    # 广播给所有成员
+    settings = get_settings()
+    new_version = (group.version or 1) + 1
+    
+    for member in members_result:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{member.portal_url}/api/webhook/group-list-update",
+                    json={
+                        "group_id": group.group_id,
+                        "db_id": group.id,
+                        "owner_portal": settings.PORTAL_URL,
+                        "action": "member_added",
+                        "added_portal": invitee_portal,
+                        "added_name": invitee_name,
+                        "members": member_list,
+                        "group_key": group.group_key,
+                        "version": new_version
+                    },
+                    timeout=10.0
+                )
+        except Exception as e:
+            print(f"Failed to broadcast to {member.portal_url}: {e}")
+    
+    # 推送给新成员
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{invitee_portal}/api/webhook/group-list-update",
+                json={
+                    "group_id": group.group_id,
+                    "db_id": group.id,
+                    "owner_portal": settings.PORTAL_URL,
+                    "action": "member_added",
+                    "added_portal": invitee_portal,
+                    "added_name": invitee_name,
+                    "members": member_list,
+                    "group_key": group.group_key,
+                    "version": new_version
+                },
+                timeout=10.0
+            )
+    except Exception as e:
+        print(f"Failed to notify new member: {e}")
+    
+    return {"status": "success", "message": "Member added and broadcasted"}

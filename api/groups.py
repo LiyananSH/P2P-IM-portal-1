@@ -31,8 +31,21 @@ async def list_groups(
     )
     groups = result.scalars().all()
     
-    return [
-        {
+    result_groups = []
+    for g in groups:
+        # 查询成员列表
+        result = await db.execute(
+            select(Contact).join(
+                group_members,
+                Contact.id == group_members.c.contact_id
+            ).where(
+                group_members.c.group_id == g.id
+            )
+        )
+        members = result.scalars().all()
+        member_list = [{"portal": m.portal_url, "display_name": m.display_name} for m in members]
+        
+        result_groups.append({
             "id": g.id,
             "group_id": g.group_id,
             "owner_id": g.owner_id,
@@ -41,10 +54,11 @@ async def list_groups(
             "avatar": g.avatar,
             "is_active": g.is_active,
             "created_at": g.created_at,
-            "members": []
-        }
-        for g in groups
-    ]
+            "members": member_list,
+            "member_count": len(member_list)
+        })
+    
+    return result_groups
 
 
 @router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
@@ -170,6 +184,7 @@ async def invite_to_group(
     print(f"[INVITE] Sending to {contact.portal_url}")
     
     try:
+        print(f"[INVITE] Sending group_db_id: {group.id}, group_id: {group.group_id}")
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{contact.portal_url}/api/groups/invite/receive",
@@ -187,17 +202,7 @@ async def invite_to_group(
             print(f"[INVITE] Response: {response.status_code}")
             
             if response.status_code == 200:
-                try:
-                    await db.execute(
-                        group_members.insert().values(
-                            group_id=group.id,
-                            contact_id=contact.id
-                        )
-                    )
-                    await db.flush()
-                except Exception:
-                    pass
-                
+                # 对方立即接受，但成员添加在 accept 接口中处理
                 return {"status": "success", "message": "Invitation sent and accepted", "shared_key": shared_key}
             else:
                 return {"status": "pending", "message": "Invitation sent, waiting for acceptance"}
@@ -446,46 +451,20 @@ async def accept_group_invite(
             "is_owner": True
         }
     else:
-        # 我是被邀请者，需要从群主获取群信息
+        # 我是被邀请者，通知群主已接受邀请
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{invite.inviter_portal}/api/groups/{invite.group_db_id}/register-portal",
-                    headers={"X-Sender-Portal": settings.PORTAL_URL},
+                    f"{invite.inviter_portal}/api/webhook/group-accept",
+                    json={
+                        "group_id": invite.group_id,
+                        "invitee_portal": settings.PORTAL_URL,
+                        "invitee_name": current_user.display_name or "用户"
+                    },
                     timeout=10.0
                 )
                 
                 if response.status_code == 200:
-                    reg_data = response.json()
-                    
-                    # 存储到本地缓存
-                    result = await db.execute(
-                        select(GroupMemberCache).where(
-                            GroupMemberCache.group_id == invite.group_id
-                        )
-                    )
-                    cache = result.scalar_one_or_none()
-                    
-                    if cache:
-                        cache.owner_portal = invite.inviter_portal
-                        cache.group_key = reg_data.get("group_key", "")
-                        cache.group_name = reg_data.get("group_name", invite.group_name)
-                        cache.db_id = reg_data.get("db_id")
-                        cache.members_json = json.dumps(reg_data.get("members", []))
-                    else:
-                        cache = GroupMemberCache(
-                            group_id=invite.group_id,
-                            db_id=reg_data.get("db_id"),
-                            group_name=reg_data.get("group_name", invite.group_name),
-                            owner_portal=invite.inviter_portal,
-                            group_key=reg_data.get("group_key", ""),
-                            members_json=json.dumps(reg_data.get("members", [])),
-                            list_version=1
-                        )
-                        db.add(cache)
-                    
-                    await db.flush()
-                    
                     invite.status = "accepted"
                     await db.flush()
                     
@@ -493,12 +472,10 @@ async def accept_group_invite(
                         "status": "success",
                         "message": "Joined group",
                         "group_id": invite.group_id,
-                        "db_id": reg_data.get("db_id"),
-                        "group_name": reg_data.get("group_name", invite.group_name),
                         "is_owner": False
                     }
                 else:
-                    raise HTTPException(status_code=502, detail="Failed to register with group owner")
+                    raise HTTPException(status_code=502, detail="Failed to notify group owner")
                     
         except httpx.RequestError as e:
             raise HTTPException(status_code=502, detail=f"Cannot connect to group owner: {str(e)}")
