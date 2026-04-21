@@ -48,6 +48,15 @@ def migrate():
         print("\n注意：group_invites.group_id 是 INTEGER 类型，需要改为 TEXT")
         print("建议：删除并重新创建 group_invites 表")
     
+    # 检查 group_messages 表是否需要添加 sender_portal 列
+    c.execute("PRAGMA table_info(group_messages)")
+    gm_columns = [col[1] for col in c.fetchall()]
+    if 'sender_portal' not in gm_columns:
+        print("\n添加 sender_portal 列到 group_messages...")
+        c.execute("ALTER TABLE group_messages ADD COLUMN sender_portal TEXT")
+        conn.commit()
+        print("添加成功")
+    
     conn.close()
 
 if __name__ == '__main__':
