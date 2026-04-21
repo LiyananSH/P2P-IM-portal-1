@@ -12,7 +12,7 @@ from auth import get_current_user
 router = APIRouter(prefix="/groups", tags=["群组"])
 
 
-@router.get("", response_model=List[dict])
+@router.get("")
 async def list_groups(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -52,9 +52,11 @@ async def create_group(
     from config import get_settings
     settings = get_settings()
     
-    # 生成全局唯一 group_id
+    # 生成全局唯一 group_id: group-{timestamp}-{creator_portal}
     import time
-    global_group_id = f"group-{int(time.time())}-{settings.PORTAL_URL.replace('https://', '').replace('http://', '').replace('/', '_')}"
+    timestamp = int(time.time())
+    portal_domain = settings.PORTAL_URL.replace('https://', '').replace('http://', '')
+    global_group_id = f"group-{timestamp}-{portal_domain}"
     
     # 创建群组
     new_group = Group(
@@ -480,7 +482,7 @@ async def receive_group_invite(
     }
 
 
-@router.get("/invites", response_model=List[dict])
+@router.get("/invites")
 async def get_group_invites(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
