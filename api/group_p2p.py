@@ -41,7 +41,65 @@ def verify_signature(content: str, timestamp: str, signature: str, shared_key: s
     return signature == expected
 
 
-# ========== 0. 获取我加入的群列表（必须在 /{group_id} 路由之前）==========
+# ========== 0. Webhook 路由（必须在 /{group_id} 路由之前）==========
+
+@router.post("/webhook/group-list-update")
+async def receive_group_list_update(
+    update_data: dict,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    接收群主推送的成员列表更新
+    存储到本地缓存
+    """
+    import json
+    
+    group_id = update_data.get("group_id")
+    db_id = update_data.get("db_id")  # 数字ID
+    owner_portal = update_data.get("owner_portal")
+    group_key = update_data.get("group_key")
+    group_name = update_data.get("group_name", "群组")
+    members = update_data.get("members", [])
+    version = update_data.get("version", 1)
+    signature = update_data.get("signature")
+    
+    if not all([group_id, owner_portal, group_key]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    
+    # 存储或更新缓存
+    result = await db.execute(
+        select(GroupMemberCache).where(
+            GroupMemberCache.group_id == group_id
+        )
+    )
+    cache = result.scalar_one_or_none()
+    
+    if cache:
+        cache.owner_portal = owner_portal
+        cache.group_key = group_key
+        cache.group_name = group_name
+        cache.db_id = db_id
+        cache.members_json = json.dumps(members)
+        cache.list_version = version
+        cache.list_signature = signature
+    else:
+        cache = GroupMemberCache(
+            group_id=group_id,
+            db_id=db_id,
+            owner_portal=owner_portal,
+            group_key=group_key,
+            group_name=group_name,
+            members_json=json.dumps(members),
+            list_version=version,
+            list_signature=signature
+        )
+        db.add(cache)
+    
+    await db.flush()
+    return {"status": "success", "version": version}
+
+
+# ========== 1. 获取我加入的群列表（必须在 /{group_id} 路由之前）==========
 
 @router.get("/my-groups")
 async def get_my_groups(
@@ -810,67 +868,6 @@ async def add_member(
     }
 
 
-# ========== 7. 接收群列表更新（Webhook）==========
-
-@router.post("/webhook/group-list-update")
-async def receive_group_list_update(
-    update_data: dict,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    接收群主推送的成员列表更新
-    存储到本地缓存
-    """
-    import json
-    
-    group_id = update_data.get("group_id")
-    db_id = update_data.get("db_id")  # 数字ID
-    owner_portal = update_data.get("owner_portal")
-    group_key = update_data.get("group_key")
-    group_name = update_data.get("group_name", "群组")
-    members = update_data.get("members", [])
-    version = update_data.get("version", 1)
-    signature = update_data.get("signature")
-    
-    if not all([group_id, owner_portal, group_key]):
-        raise HTTPException(status_code=400, detail="Missing required fields")
-    
-    # 验证签名（用 group_key）
-    # TODO: 后续升级为群主 RSA 公钥验证
-    
-    # 存储或更新缓存
-    result = await db.execute(
-        select(GroupMemberCache).where(
-            GroupMemberCache.group_id == group_id
-        )
-    )
-    cache = result.scalar_one_or_none()
-    
-    if cache:
-        cache.owner_portal = owner_portal
-        cache.group_key = group_key
-        cache.group_name = group_name
-        cache.db_id = db_id  # 更新数字ID
-        cache.members_json = json.dumps(members)
-        cache.list_version = version
-        cache.list_signature = signature
-    else:
-        cache = GroupMemberCache(
-            group_id=group_id,
-            db_id=db_id,  # 存储数字ID
-            owner_portal=owner_portal,
-            group_key=group_key,
-            group_name=group_name,
-            members_json=json.dumps(members),
-            list_version=version,
-            list_signature=signature
-        )
-        db.add(cache)
-    
-    await db.flush()
-    return {"status": "success", "version": version}
-
-
 # ========== 8. 接收成员接受通知（Webhook）==========
 
 @router.post("/group-accept")
@@ -953,6 +950,9 @@ async def receive_group_accept(
     members_result = result.scalars().all()
     member_list = [{"portal": m.portal_url, "display_name": m.display_name} for m in members_result]
     
+    print(f"[BROADCAST] Member list: {[m['portal'] for m in member_list]}")
+    print(f"[BROADCAST] New member: {invitee_portal}")
+    
     # 广播给所有成员
     settings = get_settings()
     
@@ -984,7 +984,7 @@ async def receive_group_accept(
                     timeout=10.0
                 )
         except Exception as e:
-            print(f"Failed to broadcast to {member.portal_url}: {e}")
+            print(f"[BROADCAST] Failed to broadcast to {member.portal_url}: {e}")
     
     # 推送给新成员
     try:
