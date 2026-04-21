@@ -953,6 +953,9 @@ async def receive_group_accept(
     members_result = result.scalars().all()
     member_list = [{"portal": m.portal_url, "display_name": m.display_name} for m in members_result]
     
+    # 广播给所有成员
+    settings = get_settings()
+    
     # 加入群主
     result = await db.execute(select(User).where(User.id == group.owner_id))
     owner = result.scalar_one_or_none()
@@ -960,9 +963,6 @@ async def receive_group_accept(
         "portal": settings.PORTAL_URL,  # 使用当前服务器的 portal URL
         "display_name": owner.display_name if owner else "群主"
     })
-    
-    # 广播给所有成员
-    settings = get_settings()
     new_version = (group.version or 1) + 1
     
     for member in members_result:
