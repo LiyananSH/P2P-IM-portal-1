@@ -170,7 +170,8 @@ class GroupMessageCreate(BaseModel):
 
 class GroupMessageResponse(BaseModel):
     id: int
-    group_id: int
+    group_id: Optional[int] = None
+    group_uuid: Optional[str] = None
     sender_id: int
     sender_name: Optional[str]
     content: str
