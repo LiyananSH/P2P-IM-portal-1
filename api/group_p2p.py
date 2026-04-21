@@ -873,7 +873,7 @@ async def receive_group_list_update(
 
 # ========== 8. 接收成员接受通知（Webhook）==========
 
-@router.post("/webhook/group-accept")
+@router.post("/group-accept")
 async def receive_group_accept(
     accept_data: dict,
     db: AsyncSession = Depends(get_db)

@@ -455,7 +455,7 @@ async def accept_group_invite(
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{invite.inviter_portal}/api/webhook/group-accept",
+                    f"{invite.inviter_portal}/api/groups/group-accept",
                     json={
                         "group_id": invite.group_id,
                         "invitee_portal": settings.PORTAL_URL,
