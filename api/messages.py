@@ -6,7 +6,7 @@ from datetime import datetime
 import httpx
 
 from database import get_db
-from models import User, Contact, Message, Group, GroupMessage
+from models import User, Contact, Message, Group, GroupMessage, group_members
 from schemas import MessageCreate, MessageResponse, GroupMessageCreate, GroupMessageResponse
 from auth import get_current_user
 from config import get_settings
