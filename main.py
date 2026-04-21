@@ -9,7 +9,7 @@ from auth import get_current_user
 from websocket import handle_websocket
 
 # 导入 API 路由
-from api import auth, contacts, groups, messages, files, contact_requests
+from api import auth, contacts, groups, messages, files, contact_requests, group_sync
 
 
 @asynccontextmanager
@@ -48,6 +48,7 @@ app.include_router(groups.router, prefix="/api")
 app.include_router(messages.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(contact_requests.router, prefix="/api")
+app.include_router(group_sync.router, prefix="/api")
 
 
 @app.get("/")
@@ -68,24 +69,37 @@ async def health_check():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket 连接端点"""
-    # 这里简化处理，实际应该验证 JWT
-    # 可以通过 query param 传递 token: /ws?token=xxx
-    
+    """WebSocket 连接端点 - 普通用户"""
     token = websocket.query_params.get("token")
     if not token:
         await websocket.close(code=4001, reason="Missing token")
         return
     
-    # TODO: 验证 token 获取 user_id
-    # 简化处理，假设 token 就是 user_id（实际应该用 JWT 验证）
     try:
         user_id = int(token)
     except ValueError:
         await websocket.close(code=4002, reason="Invalid token")
         return
     
-    await handle_websocket(websocket, user_id)
+    await handle_websocket(websocket, user_id, is_agent=False)
+
+
+@app.websocket("/ws/agent")
+async def agent_websocket_endpoint(websocket: WebSocket):
+    """WebSocket 连接端点 - Agent 专用"""
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4001, reason="Missing token")
+        return
+    
+    # 验证 Agent token（简化处理，实际应该有专门的 Agent 认证）
+    try:
+        user_id = int(token)
+    except ValueError:
+        await websocket.close(code=4002, reason="Invalid token")
+        return
+    
+    await handle_websocket(websocket, user_id, is_agent=True)
 
 
 if __name__ == "__main__":
