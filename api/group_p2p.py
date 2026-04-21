@@ -954,7 +954,7 @@ async def receive_group_accept(
     result = await db.execute(select(User).where(User.id == group.owner_id))
     owner = result.scalar_one_or_none()
     member_list.insert(0, {
-        "portal": owner.portal_url if owner else "",
+        "portal": settings.PORTAL_URL,  # 使用当前服务器的 portal URL
         "display_name": owner.display_name if owner else "群主"
     })
     
