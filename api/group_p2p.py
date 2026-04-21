@@ -41,6 +41,81 @@ def verify_signature(content: str, timestamp: str, signature: str, shared_key: s
     return signature == expected
 
 
+# ========== 0. 获取我加入的群列表（必须在 /{group_id} 路由之前）==========
+
+@router.get("/my-groups")
+async def get_my_groups(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取当前用户加入的所有群（从本地缓存）
+    """
+    import json
+    
+    settings = get_settings()
+    
+    result = await db.execute(
+        select(GroupMemberCache).where(
+            GroupMemberCache.owner_portal != settings.PORTAL_URL
+        )
+    )
+    caches = result.scalars().all()
+    
+    my_groups = []
+    for cache in caches:
+        members = json.loads(cache.members_json) if cache.members_json else []
+        my_groups.append({
+            "group_id": cache.group_id,
+            "group_name": cache.group_name,
+            "owner_portal": cache.owner_portal,
+            "member_count": len(members),
+            "members": members,
+            "version": cache.list_version,
+            "updated_at": cache.updated_at.isoformat() if cache.updated_at else None
+        })
+    
+    # 也获取我创建的群
+    result = await db.execute(
+        select(Group).where(
+            and_(
+                Group.owner_id == current_user.id,
+                Group.is_active == True
+            )
+        )
+    )
+    owned_groups = result.scalars().all()
+    
+    for group in owned_groups:
+        result = await db.execute(
+            select(Contact).join(
+                group_members,
+                Contact.id == group_members.c.contact_id
+            ).where(
+                group_members.c.group_id == group.id
+            )
+        )
+        members_result = result.scalars().all()
+        members = [{"portal": m.portal_url, "display_name": m.display_name} for m in members_result]
+        
+        members.insert(0, {
+            "portal": settings.PORTAL_URL,
+            "display_name": current_user.display_name or "群主"
+        })
+        
+        my_groups.append({
+            "group_id": group.group_id,
+            "group_name": group.name,
+            "owner_portal": settings.PORTAL_URL,
+            "is_owner": True,
+            "member_count": len(members),
+            "members": members,
+            "version": group.version or 1
+        })
+    
+    return {"groups": my_groups}
+
+
 # ========== 1. 成员注册 portal ==========
 
 @router.post("/{group_id}/register-portal")
@@ -682,83 +757,6 @@ async def add_member(
         "added": member_portal,
         "all_members": member_list
     }
-
-
-# ========== 6. 获取我加入的群列表（本地缓存）==========
-
-@router.get("/my-groups")
-async def get_my_groups(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    获取当前用户加入的所有群（从本地缓存）
-    """
-    import json
-    
-    # 从 group_member_cache 获取我作为成员的群
-    settings = get_settings()
-    
-    result = await db.execute(
-        select(GroupMemberCache).where(
-            GroupMemberCache.owner_portal != settings.PORTAL_URL  # 我加入的别人的群
-        )
-    )
-    caches = result.scalars().all()
-    
-    my_groups = []
-    for cache in caches:
-        members = json.loads(cache.members_json) if cache.members_json else []
-        my_groups.append({
-            "group_id": cache.group_id,
-            "owner_portal": cache.owner_portal,
-            "member_count": len(members),
-            "members": members,
-            "version": cache.list_version,
-            "updated_at": cache.updated_at.isoformat() if cache.updated_at else None
-        })
-    
-    # 也获取我创建的群（从 groups 表）
-    result = await db.execute(
-        select(Group).where(
-            and_(
-                Group.owner_id == current_user.id,
-                Group.is_active == True
-            )
-        )
-    )
-    owned_groups = result.scalars().all()
-    
-    for group in owned_groups:
-        # 获取成员列表
-        result = await db.execute(
-            select(Contact).join(
-                group_members,
-                Contact.id == group_members.c.contact_id
-            ).where(
-                group_members.c.group_id == group.id
-            )
-        )
-        members_result = result.scalars().all()
-        members = [{"portal": m.portal_url, "display_name": m.display_name} for m in members_result]
-        
-        # 加入群主
-        members.insert(0, {
-            "portal": settings.PORTAL_URL,
-            "display_name": current_user.display_name or "群主"
-        })
-        
-        my_groups.append({
-            "group_id": group.group_id,
-            "owner_portal": settings.PORTAL_URL,
-            "group_name": group.name,
-            "is_owner": True,
-            "member_count": len(members),
-            "members": members,
-            "version": group.version or 1
-        })
-    
-    return {"groups": my_groups}
 
 
 # ========== 7. 接收群列表更新（Webhook）==========
