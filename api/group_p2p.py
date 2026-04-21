@@ -473,7 +473,8 @@ async def receive_group_message(
     
     # 存储消息
     new_message = GroupMessage(
-        group_id=group.id,
+        group_id=group.id if group else None,  # 可能为空（非群主）
+        group_uuid=group.group_id if group else None,  # 用 UUID 标识群
         sender_id=sender_id,
         sender_name=message_data.get("sender_name", "未知"),
         sender_portal=message_data.get("sender_portal"),

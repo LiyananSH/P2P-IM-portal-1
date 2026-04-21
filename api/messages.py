@@ -356,6 +356,24 @@ async def list_group_messages(
     return messages
 
 
+@router.get("/group/by-uuid/{group_uuid}", response_model=List[GroupMessageResponse])
+async def list_group_messages_by_uuid(
+    group_uuid: str,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """通过 UUID 获取群聊消息（用于加入的群）"""
+    result = await db.execute(
+        select(GroupMessage).where(
+            GroupMessage.group_uuid == group_uuid
+        ).order_by(GroupMessage.created_at).limit(limit).offset(offset)
+    )
+    messages = result.scalars().all()
+    return messages
+
+
 @router.post("/group", response_model=GroupMessageResponse, status_code=status.HTTP_201_CREATED)
 async def send_group_message(
     message_data: GroupMessageCreate,

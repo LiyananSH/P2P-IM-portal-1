@@ -103,9 +103,10 @@ class Message(Base):
 class GroupMessage(Base):
     """群聊消息表"""
     __tablename__ = "group_messages"
-
+    
     id = Column(Integer, primary_key=True, index=True)
-    group_id = Column(Integer, ForeignKey("groups.id"), nullable=False)
+    group_id = Column(Integer, ForeignKey("groups.id"), nullable=True)  # 可为空（加入的群没有本地记录）
+    group_uuid = Column(String(255), nullable=True)  # 群 UUID（用于跨 Portal 识别）
     sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # 本地用户 ID
     sender_name = Column(String(100))  # 发送者显示名(用于跨 Portal 显示)
     sender_portal = Column(String(255))  # 发送者 Portal URL
@@ -116,7 +117,7 @@ class GroupMessage(Base):
     file_size = Column(Integer)
     is_from_owner = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=8))
-
+    
     # 关系
     group = relationship("Group", back_populates="messages")
 
@@ -182,24 +183,24 @@ class ContactRequest(Base):
 class GroupInvite(Base):
     """群邀请表"""
     __tablename__ = "group_invites"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # 被邀请者
-    
+
     # 群组信息
-    group_id = Column(String(255), nullable=False)  # 全局群组ID（跨Portal）
-    group_db_id = Column(Integer, nullable=True)  # 数据库数字ID（邀请者提供）
+    group_id = Column(String(255), nullable=False)  # 全局群组ID(跨Portal)
+    group_db_id = Column(Integer, nullable=True)  # 数据库数字ID(邀请者提供)
     group_name = Column(String(100), nullable=False)
     inviter_portal = Column(String(255), nullable=False)  # 邀请者 Portal
     invitee_portal = Column(String(255), nullable=True)  # 被邀请者 Portal
-    
+
     # 验证信息
     shared_key = Column(String(255), nullable=False)  # 群消息验证密钥
-    
+
     status = Column(String(20), default="pending")  # pending, accepted, rejected
-    
+
     created_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=8))
     updated_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=8), onupdate=lambda: datetime.utcnow() + timedelta(hours=8))
-    
+
     # 关系
     owner = relationship("User", foreign_keys=[owner_id])
