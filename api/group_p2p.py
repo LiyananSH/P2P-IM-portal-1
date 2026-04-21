@@ -388,7 +388,7 @@ async def send_group_message_p2p(
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{owner.portal_url}/api/groups/{group.group_id}/messages/receive",
+                    f"{owner.portal_url}/api/groups/receive/{group.group_id}",
                     json=message_payload,
                     timeout=10.0
                 )
@@ -408,7 +408,7 @@ async def send_group_message_p2p(
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{member.portal_url}/api/groups/{group.group_id}/messages/receive",
+                    f"{member.portal_url}/api/groups/receive/{group.group_id}",
                     json=message_payload,
                     timeout=10.0
                 )
@@ -434,7 +434,7 @@ async def send_group_message_p2p(
 
 # ========== 4. P2P 接收消息 ==========
 
-@router.post("/{group_id}/messages/receive")
+@router.post("/receive/{group_id}")
 async def receive_group_message(
     group_id: str,  # 使用全局 group_id 字符串
     message_data: dict,
