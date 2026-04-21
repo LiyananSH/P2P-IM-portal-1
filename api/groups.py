@@ -403,7 +403,7 @@ async def reject_group_invite(
 
 # ========== 群组 CRUD（/{group_id} 必须在最后）============
 
-@router.get("/{group_id}", response_model=GroupResponse)
+@router.get("/{group_id:int}", response_model=GroupResponse)
 async def get_group(
     group_id: int,
     current_user: User = Depends(get_current_user),
@@ -427,7 +427,7 @@ async def get_group(
     return group
 
 
-@router.put("/{group_id}", response_model=GroupResponse)
+@router.put("/{group_id:int}", response_model=GroupResponse)
 async def update_group(
     group_id: int,
     group_data: GroupUpdate,
@@ -456,7 +456,7 @@ async def update_group(
     return group
 
 
-@router.post("/{group_id}/members", response_model=GroupResponse)
+@router.post("/{group_id:int}/members", response_model=GroupResponse)
 async def add_members(
     group_id: int,
     member_data: GroupMemberAdd,
@@ -488,7 +488,7 @@ async def add_members(
     return group
 
 
-@router.delete("/{group_id}/members/{contact_id}", response_model=GroupResponse)
+@router.delete("/{group_id:int}/members/{contact_id:int}", response_model=GroupResponse)
 async def remove_member(
     group_id: int,
     contact_id: int,
@@ -520,7 +520,7 @@ async def remove_member(
     return group
 
 
-@router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{group_id:int}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(
     group_id: int,
     current_user: User = Depends(get_current_user),
