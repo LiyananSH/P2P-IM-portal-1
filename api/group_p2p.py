@@ -358,6 +358,21 @@ async def send_group_message_p2p(
         "signature": signature
     }
     
+    # 先存储发送者自己的消息
+    new_message = GroupMessage(
+        group_id=group.id,
+        group_uuid=group.group_id,
+        sender_id=current_user.id,
+        sender_name=current_user.display_name or "用户",
+        sender_portal=sender_portal,
+        content=content,
+        message_type=message_data.get("message_type", "text"),
+        is_from_owner=True
+    )
+    db.add(new_message)
+    await db.flush()
+    message_id = new_message.id
+    
     # P2P 发送给每个成员（通过他们注册的 portal）
     success_count = 0
     failed_members = []
@@ -423,25 +438,7 @@ async def receive_group_message(
     验证签名并存储
     不需要用户认证，因为这是从其他Portal后端调用的
     """
-    result = await db.execute(
-        select(Group).where(
-            and_(
-                Group.group_id == group_id,  # 使用全局 group_id 查找
-                Group.is_active == True
-            )
-        )
-    )
-    group = result.scalar_one_or_none()
-    
-    if not group:
-        raise HTTPException(status_code=404, detail="Group not found")
-    
-    sender_portal = message_data.get("sender_portal")
-    content = message_data.get("content", "")
-    timestamp = message_data.get("timestamp", "")
-    signature = message_data.get("signature", "")
-    
-    # 验证签名
+    # 优先从缓存获取（适用于非群主）
     result = await db.execute(
         select(GroupMemberCache).where(
             GroupMemberCache.group_id == group_id
@@ -449,22 +446,48 @@ async def receive_group_message(
     )
     cache = result.scalar_one_or_none()
     
+    # 如果没有缓存，尝试从 Group 表获取（适用于群主）
+    group = None
+    if not cache:
+        result = await db.execute(
+            select(Group).where(
+                and_(
+                    Group.group_id == group_id,
+                    Group.is_active == True
+                )
+            )
+        )
+        group = result.scalar_one_or_none()
+        
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+    
+    sender_portal = message_data.get("sender_portal")
+    content = message_data.get("content", "")
+    timestamp = message_data.get("timestamp", "")
+    signature = message_data.get("signature", "")
+    
+    # 确定 group_key 用于验证
+    group_key = None
+    if cache:
+        group_key = cache.group_key
+    elif group:
+        group_key = group.group_key
+    else:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # 验证发送者在成员列表中（如果有缓存）
     if cache and cache.members_json:
-        # 有缓存：先验证发送者在成员列表中
         import json
         members = json.loads(cache.members_json)
         member_portals = [m.get("portal") for m in members]
         
         if sender_portal not in member_portals:
             raise HTTPException(status_code=403, detail="Sender not in group members")
-        
-        # 验证签名
-        if not verify_signature(content, timestamp, signature, cache.group_key):
-            raise HTTPException(status_code=401, detail="Invalid signature")
-    else:
-        # 没有缓存，使用群的 group_key 验证（兼容旧逻辑）
-        if not verify_signature(content, timestamp, signature, group.group_key):
-            raise HTTPException(status_code=401, detail="Invalid signature")
+    
+    # 验证签名
+    if not verify_signature(content, timestamp, signature, group_key):
+        raise HTTPException(status_code=401, detail="Invalid signature")
     
     # 获取当前用户的第一个（简化处理）
     result = await db.execute(select(User).where(User.is_active == True).limit(1))
@@ -472,9 +495,19 @@ async def receive_group_message(
     sender_id = current_user.id if current_user else 1
     
     # 存储消息
+    # 确定 group_id (数字) 和 group_uuid (字符串)
+    db_id = None
+    uuid = None
+    if group:
+        db_id = group.id
+        uuid = group.group_id
+    elif cache:
+        db_id = cache.db_id
+        uuid = cache.group_id
+    
     new_message = GroupMessage(
-        group_id=group.id if group else None,  # 可能为空（非群主）
-        group_uuid=group.group_id if group else None,  # 用 UUID 标识群
+        group_id=db_id,  # 数字ID，可能为空
+        group_uuid=uuid,  # UUID 字符串
         sender_id=sender_id,
         sender_name=message_data.get("sender_name", "未知"),
         sender_portal=message_data.get("sender_portal"),
