@@ -686,7 +686,7 @@ async def remove_member(
         try:
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    f"{member.portal_url}/api/webhook/group-list-update",
+                    f"{member.portal_url}/api/groups/webhook/group-list-update",
                     json={
                         "group_id": group.group_id,
                         "db_id": group.id,  # 数字ID
@@ -822,7 +822,7 @@ async def add_member(
         try:
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    f"{target.portal_url}/api/webhook/group-list-update",
+                    f"{target.portal_url}/api/groups/webhook/group-list-update",
                     json={
                         "group_id": group.group_id,
                         "db_id": group.id,  # 数字ID
@@ -843,7 +843,7 @@ async def add_member(
     try:
         async with httpx.AsyncClient() as client:
             await client.post(
-                f"{member_portal}/api/webhook/group-list-update",
+                f"{member_portal}/api/groups/webhook/group-list-update",
                 json={
                     "group_id": group.group_id,
                     "db_id": group.id,  # 数字ID
@@ -969,7 +969,7 @@ async def receive_group_accept(
         try:
             async with httpx.AsyncClient() as client:
                 await client.post(
-                    f"{member.portal_url}/api/webhook/group-list-update",
+                    f"{member.portal_url}/api/groups/webhook/group-list-update",
                     json={
                         "group_id": group.group_id,
                         "db_id": group.id,
@@ -990,7 +990,7 @@ async def receive_group_accept(
     try:
         async with httpx.AsyncClient() as client:
             await client.post(
-                f"{invitee_portal}/api/webhook/group-list-update",
+                f"{invitee_portal}/api/groups/webhook/group-list-update",
                 json={
                     "group_id": group.group_id,
                     "db_id": group.id,
