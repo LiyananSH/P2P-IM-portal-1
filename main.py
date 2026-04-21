@@ -1,7 +1,10 @@
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from config import get_settings
 from database import init_db
@@ -53,10 +56,18 @@ app.include_router(contact_requests.router, prefix="/api")
 app.include_router(group_sync_router, prefix="/api")
 app.include_router(group_p2p_router, prefix="/api")
 
+# 静态文件服务
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
 
 @app.get("/")
 async def root():
-    """根路径"""
+    """根路径 - 返回前端页面"""
+    index_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
     return {
         "name": settings.APP_NAME,
         "version": "0.1.0",
