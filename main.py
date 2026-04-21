@@ -49,12 +49,12 @@ app.add_middleware(
 # 注册 API 路由
 app.include_router(auth.router, prefix="/api")
 app.include_router(contacts.router, prefix="/api")
+app.include_router(group_p2p_router, prefix="/api")  # 必须在 groups/group_sync 之前（webhook 路由）
 app.include_router(groups.router, prefix="/api")
 app.include_router(messages.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(contact_requests.router, prefix="/api")
 app.include_router(group_sync_router, prefix="/api")
-app.include_router(group_p2p_router, prefix="/api")
 
 # 静态文件服务
 static_dir = os.path.join(os.path.dirname(__file__), "static")
