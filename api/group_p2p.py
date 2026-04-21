@@ -883,6 +883,9 @@ async def receive_group_accept(
     群主端：添加成员并广播
     """
     from models import Group, Contact, GroupInvite
+    from config import get_settings
+    
+    settings = get_settings()
     
     group_id = accept_data.get("group_id")
     invitee_portal = accept_data.get("invitee_portal")
