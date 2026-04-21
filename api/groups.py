@@ -175,8 +175,10 @@ async def invite_to_group(
                 f"{contact.portal_url}/api/groups/invite/receive",
                 json={
                     "group_id": group.group_id,
+                    "group_db_id": group.id,  # 数据库数字ID
                     "group_name": group.name,
                     "inviter_portal": settings.PORTAL_URL,
+                    "invitee_portal": contact.portal_url,  # 被邀请者 Portal
                     "shared_key": shared_key,
                     "timestamp": datetime.utcnow().isoformat()
                 },
@@ -246,8 +248,10 @@ async def receive_group_invite(
     invite = GroupInvite(
         owner_id=current_user.id,
         group_id=group_id,
+        group_db_id=invite_data.get("group_db_id"),
         group_name=group_name,
         inviter_portal=inviter_portal,
+        invitee_portal=invite_data.get("invitee_portal"),
         shared_key=shared_key,
         status="pending"
     )
@@ -294,8 +298,13 @@ async def accept_group_invite(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """接受群邀请"""
-    from models import GroupInvite
+    """接受群邀请 - 完整初始化 P2P 群聊机制"""
+    from models import GroupInvite, GroupMemberCache
+    import json
+    import httpx
+    from config import get_settings
+    
+    settings = get_settings()
     
     result = await db.execute(
         select(GroupInvite).where(
@@ -311,65 +320,188 @@ async def accept_group_invite(
     if not invite:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invitation not found")
     
-    # 查找或创建联系人
-    result = await db.execute(
-        select(Contact).where(
-            and_(
-                Contact.portal_url == invite.inviter_portal,
-                Contact.is_active == True
+    # 检查是否是群主（邀请者是自己创建的群的邀请）
+    is_owner = (invite.inviter_portal == settings.PORTAL_URL)
+    
+    if is_owner:
+        # 我是群主，直接处理
+        result = await db.execute(
+            select(Contact).where(
+                and_(
+                    Contact.portal_url == invite.invitee_portal,
+                    Contact.is_active == True
+                )
             )
         )
-    )
-    contact = result.scalar_one_or_none()
-    
-    if not contact:
-        contact = Contact(
-            owner_id=current_user.id,
-            display_name=f"用户-{invite.inviter_portal.split('//')[1]}",
-            portal_url=invite.inviter_portal,
-            shared_key=invite.shared_key,
-            is_active=True
-        )
-        db.add(contact)
-        await db.flush()
-    
-    # 查找或创建群组（使用全局 group_id）
-    result = await db.execute(
-        select(Group).where(
-            and_(
-                Group.group_id == invite.group_id,
-                Group.is_active == True
+        contact = result.scalar_one_or_none()
+        
+        if not contact:
+            contact = Contact(
+                owner_id=current_user.id,
+                display_name=f"用户-{invite.invitee_portal.split('//')[1]}",
+                portal_url=invite.invitee_portal,
+                shared_key=invite.shared_key,
+                is_active=True
+            )
+            db.add(contact)
+            await db.flush()
+        
+        # 查找群组
+        result = await db.execute(
+            select(Group).where(
+                and_(
+                    Group.group_id == invite.group_id,
+                    Group.is_active == True
+                )
             )
         )
-    )
-    group = result.scalar_one_or_none()
-    
-    if not group:
-        group = Group(
-            group_id=invite.group_id,
-            owner_id=current_user.id,
-            name=invite.group_name,
-            is_active=True
-        )
-        db.add(group)
-        await db.flush()
-    
-    # 添加成员关系
-    try:
-        await db.execute(
-            group_members.insert().values(
-                group_id=group.id,
-                contact_id=contact.id
+        group = result.scalar_one_or_none()
+        
+        if not group:
+            raise HTTPException(status_code=404, detail="Group not found")
+        
+        # 添加成员关系
+        try:
+            await db.execute(
+                group_members.insert().values(
+                    group_id=group.id,
+                    contact_id=contact.id
+                )
+            )
+            await db.flush()
+        except Exception:
+            pass
+        
+        # 获取更新后的成员列表
+        result = await db.execute(
+            select(Contact).join(
+                group_members,
+                Contact.id == group_members.c.contact_id
+            ).where(
+                group_members.c.group_id == group.id
             )
         )
+        members_result = result.scalars().all()
+        member_list = [{"portal": m.portal_url, "display_name": m.display_name} for m in members_result]
+        
+        # 加入群主
+        member_list.insert(0, {
+            "portal": settings.PORTAL_URL,
+            "display_name": current_user.display_name or "群主"
+        })
+        
+        # 推送更新给所有成员
+        new_version = (group.version or 1) + 1
+        for member in members_result:
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"{member.portal_url}/api/webhook/group-list-update",
+                        json={
+                            "group_id": group.group_id,
+                            "db_id": group.id,
+                            "owner_portal": settings.PORTAL_URL,
+                            "action": "member_added",
+                            "added_portal": invite.invitee_portal,
+                            "added_name": current_user.display_name or "成员",
+                            "members": member_list,
+                            "group_key": invite.shared_key,
+                            "version": new_version
+                        },
+                        timeout=10.0
+                    )
+            except Exception as e:
+                print(f"Failed to push update to {member.portal_url}: {e}")
+        
+        # 也推送给新成员自己
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{invite.invitee_portal}/api/webhook/group-list-update",
+                    json={
+                        "group_id": group.group_id,
+                        "db_id": group.id,
+                        "owner_portal": settings.PORTAL_URL,
+                        "action": "member_added",
+                        "added_portal": invite.invitee_portal,
+                        "added_name": current_user.display_name or "成员",
+                        "members": member_list,
+                        "group_key": invite.shared_key,
+                        "version": new_version
+                    },
+                    timeout=10.0
+                )
+        except Exception as e:
+            print(f"Failed to push update to new member {invite.invitee_portal}: {e}")
+        
+        invite.status = "accepted"
         await db.flush()
-    except Exception:
-        pass
-    
-    invite.status = "accepted"
-    await db.flush()
-    
-    return {"status": "success", "message": "Joined group", "group_id": group.id, "group_name": group.name}
+        
+        return {
+            "status": "success",
+            "message": "Joined group",
+            "group_id": group.group_id,
+            "db_id": group.id,
+            "group_name": group.name,
+            "is_owner": True
+        }
+    else:
+        # 我是被邀请者，需要从群主获取群信息
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{invite.inviter_portal}/api/groups/{invite.group_db_id}/register-portal",
+                    headers={"X-Sender-Portal": settings.PORTAL_URL},
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    reg_data = response.json()
+                    
+                    # 存储到本地缓存
+                    result = await db.execute(
+                        select(GroupMemberCache).where(
+                            GroupMemberCache.group_id == invite.group_id
+                        )
+                    )
+                    cache = result.scalar_one_or_none()
+                    
+                    if cache:
+                        cache.owner_portal = invite.inviter_portal
+                        cache.group_key = reg_data.get("group_key", "")
+                        cache.group_name = reg_data.get("group_name", invite.group_name)
+                        cache.db_id = reg_data.get("db_id")
+                        cache.members_json = json.dumps(reg_data.get("members", []))
+                    else:
+                        cache = GroupMemberCache(
+                            group_id=invite.group_id,
+                            db_id=reg_data.get("db_id"),
+                            group_name=reg_data.get("group_name", invite.group_name),
+                            owner_portal=invite.inviter_portal,
+                            group_key=reg_data.get("group_key", ""),
+                            members_json=json.dumps(reg_data.get("members", [])),
+                            list_version=1
+                        )
+                        db.add(cache)
+                    
+                    await db.flush()
+                    
+                    invite.status = "accepted"
+                    await db.flush()
+                    
+                    return {
+                        "status": "success",
+                        "message": "Joined group",
+                        "group_id": invite.group_id,
+                        "db_id": reg_data.get("db_id"),
+                        "group_name": reg_data.get("group_name", invite.group_name),
+                        "is_owner": False
+                    }
+                else:
+                    raise HTTPException(status_code=502, detail="Failed to register with group owner")
+                    
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"Cannot connect to group owner: {str(e)}")
 
 
 @router.post("/invites/{invite_id}/reject", response_model=dict)
