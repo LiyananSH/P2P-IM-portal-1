@@ -120,6 +120,20 @@ class GroupMessage(Base):
     group = relationship("Group", back_populates="messages")
 
 
+class GroupMemberCache(Base):
+    """群成员本地缓存表"""
+    __tablename__ = "group_member_cache"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(String(255), unique=True, nullable=False)  # 全局 group_id
+    owner_portal = Column(String(255), nullable=False)  # 群主 portal
+    group_key = Column(String(255), nullable=False)  # 群密钥
+    members_json = Column(Text)  # 成员列表 JSON [{"portal": "...", "name": "..."}]
+    list_version = Column(Integer, default=1)  # 列表版本
+    list_signature = Column(Text)  # 群主签名
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class FileRecord(Base):
     """文件记录表"""
     __tablename__ = "files"

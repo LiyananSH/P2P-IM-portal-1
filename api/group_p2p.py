@@ -24,7 +24,7 @@ import hashlib
 import secrets
 
 from database import get_db
-from models import User, Group, Contact, GroupMessage, group_members
+from models import User, Group, Contact, GroupMessage, GroupMemberCache, group_members
 from auth import get_current_user
 from config import get_settings
 
@@ -126,6 +126,31 @@ async def register_member_portal(
             "portal": owner.portal_url,
             "display_name": owner.display_name or "群主"
         })
+    
+    # 存储到本地缓存（非群主）
+    if not is_owner:
+        import json
+        result = await db.execute(
+            select(GroupMemberCache).where(
+                GroupMemberCache.group_id == group.group_id
+            )
+        )
+        cache = result.scalar_one_or_none()
+        
+        if cache:
+            cache.owner_portal = owner.portal_url if owner else ""
+            cache.group_key = group.group_key
+            cache.members_json = json.dumps(member_list)
+        else:
+            cache = GroupMemberCache(
+                group_id=group.group_id,
+                owner_portal=owner.portal_url if owner else "",
+                group_key=group.group_key,
+                members_json=json.dumps(member_list),
+                list_version=1
+            )
+            db.add(cache)
+        await db.flush()
     
     return {
         "status": "success",
@@ -329,13 +354,35 @@ async def receive_group_message(
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
     
-    # 验证签名
+    sender_portal = message_data.get("sender_portal")
     content = message_data.get("content", "")
     timestamp = message_data.get("timestamp", "")
     signature = message_data.get("signature", "")
     
-    if not verify_signature(content, timestamp, signature, group.group_key):
-        raise HTTPException(status_code=401, detail="Invalid signature")
+    # 验证签名
+    result = await db.execute(
+        select(GroupMemberCache).where(
+            GroupMemberCache.group_id == group_id
+        )
+    )
+    cache = result.scalar_one_or_none()
+    
+    if cache and cache.members_json:
+        # 有缓存：先验证发送者在成员列表中
+        import json
+        members = json.loads(cache.members_json)
+        member_portals = [m.get("portal") for m in members]
+        
+        if sender_portal not in member_portals:
+            raise HTTPException(status_code=403, detail="Sender not in group members")
+        
+        # 验证签名
+        if not verify_signature(content, timestamp, signature, cache.group_key):
+            raise HTTPException(status_code=401, detail="Invalid signature")
+    else:
+        # 没有缓存，使用群的 group_key 验证（兼容旧逻辑）
+        if not verify_signature(content, timestamp, signature, group.group_key):
+            raise HTTPException(status_code=401, detail="Invalid signature")
     
     # 获取当前用户的第一个（简化处理）
     result = await db.execute(select(User).where(User.is_active == True).limit(1))
@@ -448,6 +495,9 @@ async def remove_member(
         })
     
     # 推送新列表给所有剩余成员
+    settings = get_settings()
+    new_version = (group.version or 1) + 1
+    
     for member in remaining_members:
         if member.portal_url == member_portal:
             continue
@@ -458,10 +508,12 @@ async def remove_member(
                     f"{member.portal_url}/api/webhook/group-list-update",
                     json={
                         "group_id": group.group_id,
+                        "owner_portal": settings.PORTAL_URL,
                         "action": "member_removed",
                         "removed_portal": member_portal,
                         "members": member_list,
-                        "group_key": group.group_key
+                        "group_key": group.group_key,
+                        "version": new_version
                     },
                     timeout=10.0
                 )
@@ -485,6 +537,47 @@ async def receive_group_list_update(
 ):
     """
     接收群主推送的成员列表更新
+    存储到本地缓存
     """
-    # TODO: 实现本地存储更新
-    return {"status": "received"}
+    import json
+    
+    group_id = update_data.get("group_id")
+    owner_portal = update_data.get("owner_portal")
+    group_key = update_data.get("group_key")
+    members = update_data.get("members", [])
+    version = update_data.get("version", 1)
+    signature = update_data.get("signature")
+    
+    if not all([group_id, owner_portal, group_key]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    
+    # 验证签名（用 group_key）
+    # TODO: 后续升级为群主 RSA 公钥验证
+    
+    # 存储或更新缓存
+    result = await db.execute(
+        select(GroupMemberCache).where(
+            GroupMemberCache.group_id == group_id
+        )
+    )
+    cache = result.scalar_one_or_none()
+    
+    if cache:
+        cache.owner_portal = owner_portal
+        cache.group_key = group_key
+        cache.members_json = json.dumps(members)
+        cache.list_version = version
+        cache.list_signature = signature
+    else:
+        cache = GroupMemberCache(
+            group_id=group_id,
+            owner_portal=owner_portal,
+            group_key=group_key,
+            members_json=json.dumps(members),
+            list_version=version,
+            list_signature=signature
+        )
+        db.add(cache)
+    
+    await db.flush()
+    return {"status": "success", "version": version}
