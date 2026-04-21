@@ -60,6 +60,21 @@ app.include_router(group_p2p_router, prefix="/api")
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    
+    # 为前端相对路径提供重定向
+    @app.get("/style.css")
+    async def get_style():
+        style_path = os.path.join(static_dir, "style.css")
+        if os.path.exists(style_path):
+            return FileResponse(style_path)
+        return {"error": "Not found"}
+    
+    @app.get("/app.js")
+    async def get_app_js():
+        js_path = os.path.join(static_dir, "app.js")
+        if os.path.exists(js_path):
+            return FileResponse(js_path)
+        return {"error": "Not found"}
 
 
 @app.get("/")
