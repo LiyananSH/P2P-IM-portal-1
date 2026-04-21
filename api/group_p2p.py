@@ -70,6 +70,7 @@ async def get_my_groups(
             "db_id": cache.db_id,  # 数字ID
             "group_name": cache.group_name,
             "owner_portal": cache.owner_portal,
+            "is_owner": False,  # 从缓存获取的都是加入的群，不是群主
             "member_count": len(members),
             "members": members,
             "version": cache.list_version,
@@ -417,11 +418,15 @@ async def send_group_message_p2p(
             print(f"Failed to send to {member.portal_url}: {e}")
             failed_members.append(member.portal_url)
     
+    # 记录发送结果
+    print(f"[P2P Send] Message sent to {success_count} members, failed: {failed_members}")
+    
     return {
         "status": "success",
         "message_id": f"msg-{int(datetime.utcnow().timestamp())}",
         "sent_to": success_count,
-        "failed": failed_members
+        "failed": failed_members,
+        "total_members": len(members) + (1 if owner and owner.portal_url != sender_portal else 0)
     }
 
 
