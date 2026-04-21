@@ -263,7 +263,7 @@ async def send_group_message_p2p(
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{owner.portal_url}/api/groups/{group_id}/messages/receive",
+                    f"{owner.portal_url}/api/groups/{group.group_id}/messages/receive",
                     json=message_payload,
                     timeout=10.0
                 )
@@ -283,7 +283,7 @@ async def send_group_message_p2p(
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{member.portal_url}/api/groups/{group_id}/messages/receive",
+                    f"{member.portal_url}/api/groups/{group.group_id}/messages/receive",
                     json=message_payload,
                     timeout=10.0
                 )
@@ -307,19 +307,19 @@ async def send_group_message_p2p(
 
 @router.post("/{group_id}/messages/receive")
 async def receive_group_message(
-    group_id: int,
+    group_id: str,  # 使用全局 group_id 字符串
     message_data: dict,
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     P2P 接收消息
     验证签名并存储
+    不需要用户认证，因为这是从其他Portal后端调用的
     """
     result = await db.execute(
         select(Group).where(
             and_(
-                Group.id == group_id,
+                Group.group_id == group_id,  # 使用全局 group_id 查找
                 Group.is_active == True
             )
         )
@@ -337,10 +337,15 @@ async def receive_group_message(
     if not verify_signature(content, timestamp, signature, group.group_key):
         raise HTTPException(status_code=401, detail="Invalid signature")
     
+    # 获取当前用户的第一个（简化处理）
+    result = await db.execute(select(User).where(User.is_active == True).limit(1))
+    current_user = result.scalar_one_or_none()
+    sender_id = current_user.id if current_user else 1
+    
     # 存储消息
     new_message = GroupMessage(
         group_id=group.id,
-        sender_id=current_user.id,
+        sender_id=sender_id,
         sender_name=message_data.get("sender_name", "未知"),
         sender_portal=message_data.get("sender_portal"),
         content=content,
