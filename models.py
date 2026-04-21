@@ -126,7 +126,8 @@ class GroupMemberCache(Base):
     __tablename__ = "group_member_cache"
     
     id = Column(Integer, primary_key=True, index=True)
-    group_id = Column(String(255), unique=True, nullable=False)  # 全局 group_id
+    group_id = Column(String(255), unique=True, nullable=False)  # 全局 group_id (UUID)
+    db_id = Column(Integer, nullable=True)  # 数据库数字ID，用于API调用
     group_name = Column(String(100))  # 群名称
     owner_portal = Column(String(255), nullable=False)  # 群主 portal
     group_key = Column(String(255), nullable=False)  # 群密钥

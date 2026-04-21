@@ -67,6 +67,7 @@ async def get_my_groups(
         members = json.loads(cache.members_json) if cache.members_json else []
         my_groups.append({
             "group_id": cache.group_id,
+            "db_id": cache.db_id,  # 数字ID
             "group_name": cache.group_name,
             "owner_portal": cache.owner_portal,
             "member_count": len(members),
@@ -105,6 +106,7 @@ async def get_my_groups(
         
         my_groups.append({
             "group_id": group.group_id,
+            "db_id": group.id,  # 数字ID
             "group_name": group.name,
             "owner_portal": settings.PORTAL_URL,
             "is_owner": True,
@@ -216,9 +218,13 @@ async def register_member_portal(
             cache.owner_portal = owner.portal_url if owner else ""
             cache.group_key = group.group_key
             cache.members_json = json.dumps(member_list)
+            cache.db_id = group.id  # 存储数字ID
+            cache.group_name = group.name
         else:
             cache = GroupMemberCache(
                 group_id=group.group_id,
+                db_id=group.id,  # 存储数字ID
+                group_name=group.name,
                 owner_portal=owner.portal_url if owner else "",
                 group_key=group.group_key,
                 members_json=json.dumps(member_list),
@@ -230,6 +236,7 @@ async def register_member_portal(
     return {
         "status": "success",
         "group_id": group.group_id,
+        "db_id": group.id,  # 返回数字ID
         "group_name": group.name,
         "group_key": group.group_key,
         "members": member_list,
@@ -583,6 +590,7 @@ async def remove_member(
                     f"{member.portal_url}/api/webhook/group-list-update",
                     json={
                         "group_id": group.group_id,
+                        "db_id": group.id,  # 数字ID
                         "owner_portal": settings.PORTAL_URL,
                         "action": "member_removed",
                         "removed_portal": member_portal,
@@ -718,6 +726,7 @@ async def add_member(
                     f"{target.portal_url}/api/webhook/group-list-update",
                     json={
                         "group_id": group.group_id,
+                        "db_id": group.id,  # 数字ID
                         "owner_portal": settings.PORTAL_URL,
                         "action": "member_added",
                         "added_portal": member_portal,
@@ -738,6 +747,7 @@ async def add_member(
                 f"{member_portal}/api/webhook/group-list-update",
                 json={
                     "group_id": group.group_id,
+                    "db_id": group.id,  # 数字ID
                     "owner_portal": settings.PORTAL_URL,
                     "action": "member_added",
                     "added_portal": member_portal,
@@ -773,6 +783,7 @@ async def receive_group_list_update(
     import json
     
     group_id = update_data.get("group_id")
+    db_id = update_data.get("db_id")  # 数字ID
     owner_portal = update_data.get("owner_portal")
     group_key = update_data.get("group_key")
     group_name = update_data.get("group_name", "群组")
@@ -798,12 +809,14 @@ async def receive_group_list_update(
         cache.owner_portal = owner_portal
         cache.group_key = group_key
         cache.group_name = group_name
+        cache.db_id = db_id  # 更新数字ID
         cache.members_json = json.dumps(members)
         cache.list_version = version
         cache.list_signature = signature
     else:
         cache = GroupMemberCache(
             group_id=group_id,
+            db_id=db_id,  # 存储数字ID
             owner_portal=owner_portal,
             group_key=group_key,
             group_name=group_name,
