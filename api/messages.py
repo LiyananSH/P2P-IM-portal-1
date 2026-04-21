@@ -393,29 +393,36 @@ async def send_group_message(
     # 验证 sender 在群成员列表中
     # 群主可以发送消息，或者 sender 是群成员列表中的联系人
     is_owner = group.owner_id == current_user.id
+    is_member_in_contacts = False
     
-    if not is_owner:
-        # 非群主需要检查是否是群成员
+    # 检查 sender_portal 是否在群成员的联系中
+    result = await db.execute(
+        select(Contact).where(
+            and_(
+                Contact.portal_url == sender_portal,
+                Contact.is_active == True
+            )
+        )
+    )
+    contact = result.scalar_one_or_none()
+    
+    if contact:
+        # 检查该联系人是否在群成员中
         result = await db.execute(
             select(group_members).where(
                 and_(
                     group_members.c.group_id == message_data.group_id,
-                    group_members.c.contact_id.in_(
-                        select(Contact.id).where(
-                            and_(
-                                Contact.portal_url == sender_portal,
-                                Contact.is_active == True
-                            )
-                        )
-                    )
+                    group_members.c.contact_id == contact.id
                 )
             )
         )
-        if not result.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Sender not in group members"
-            )
+        is_member_in_contacts = result.scalar_one_or_none() is not None
+    
+    if not is_owner and not is_member_in_contacts:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sender not in group members"
+        )
     
     # 创建群消息
     new_message = GroupMessage(
