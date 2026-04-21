@@ -1004,4 +1004,12 @@ async def receive_group_accept(
     except Exception as e:
         print(f"Failed to notify new member: {e}")
     
-    return {"status": "success", "message": "Member added and broadcasted"}
+    return {
+        "status": "success",
+        "message": "Member added and broadcasted",
+        "group_id": group.group_id,
+        "db_id": group.id,
+        "group_name": group.name,
+        "group_key": group.group_key,
+        "members": member_list
+    }

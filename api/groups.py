@@ -465,6 +465,40 @@ async def accept_group_invite(
                 )
                 
                 if response.status_code == 200:
+                    # 获取群主返回的群信息
+                    reg_data = response.json()
+                    
+                    # 存储到本地缓存
+                    from models import GroupMemberCache
+                    import json
+                    
+                    result = await db.execute(
+                        select(GroupMemberCache).where(
+                            GroupMemberCache.group_id == invite.group_id
+                        )
+                    )
+                    cache = result.scalar_one_or_none()
+                    
+                    if cache:
+                        cache.owner_portal = invite.inviter_portal
+                        cache.group_key = reg_data.get("group_key", "")
+                        cache.group_name = reg_data.get("group_name", invite.group_name)
+                        cache.db_id = reg_data.get("db_id")
+                        cache.members_json = json.dumps(reg_data.get("members", []))
+                    else:
+                        cache = GroupMemberCache(
+                            group_id=invite.group_id,
+                            db_id=reg_data.get("db_id"),
+                            group_name=reg_data.get("group_name", invite.group_name),
+                            owner_portal=invite.inviter_portal,
+                            group_key=reg_data.get("group_key", ""),
+                            members_json=json.dumps(reg_data.get("members", [])),
+                            list_version=1
+                        )
+                        db.add(cache)
+                    
+                    await db.flush()
+                    
                     invite.status = "accepted"
                     await db.flush()
                     
