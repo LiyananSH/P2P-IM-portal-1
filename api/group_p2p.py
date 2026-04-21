@@ -528,7 +528,240 @@ async def remove_member(
     }
 
 
-# ========== 6. 接收群列表更新（Webhook）==========
+# ========== 5b. 添加成员 ==========
+
+@router.post("/{group_id}/members/add")
+async def add_member(
+    group_id: int,
+    add_data: dict,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    添加成员
+    群主操作，更新列表并推送新列表给所有成员（包括新添加的）
+    """
+    settings = get_settings()
+    member_portal = add_data.get("member_portal")
+    member_name = add_data.get("member_name", "成员")
+    
+    if not member_portal:
+        raise HTTPException(status_code=400, detail="member_portal required")
+    
+    # 获取群信息
+    result = await db.execute(
+        select(Group).where(
+            and_(
+                Group.id == group_id,
+                Group.is_active == True
+            )
+        )
+    )
+    group = result.scalar_one_or_none()
+    
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # 验证是群主
+    if group.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only owner can add members")
+    
+    # 查找联系人
+    result = await db.execute(
+        select(Contact).where(
+            and_(
+                Contact.portal_url == member_portal,
+                Contact.is_active == True
+            )
+        )
+    )
+    contact = result.scalar_one_or_none()
+    
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    
+    # 检查是否已在群中
+    result = await db.execute(
+        select(group_members).where(
+            and_(
+                group_members.c.group_id == group_id,
+                group_members.c.contact_id == contact.id
+            )
+        )
+    )
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Member already in group")
+    
+    # 添加到 group_members
+    await db.execute(
+        group_members.insert().values(
+            group_id=group_id,
+            contact_id=contact.id
+        )
+    )
+    await db.flush()
+    
+    # 获取更新后的成员列表
+    result = await db.execute(
+        select(Contact).join(
+            group_members,
+            Contact.id == group_members.c.contact_id
+        ).where(
+            group_members.c.group_id == group_id
+        )
+    )
+    remaining_members = result.scalars().all()
+    
+    member_list = []
+    for m in remaining_members:
+        member_list.append({
+            "portal": m.portal_url,
+            "display_name": m.display_name
+        })
+    
+    # 加入群主
+    result = await db.execute(select(User).where(User.id == group.owner_id))
+    owner = result.scalar_one_or_none()
+    if owner:
+        member_list.insert(0, {
+            "portal": owner.portal_url,
+            "display_name": owner.display_name or "群主"
+        })
+    
+    # 推送新列表给所有成员（包括新添加的）
+    new_version = (group.version or 1) + 1
+    all_targets = list(remaining_members)
+    
+    # 添加群主到推送列表
+    if owner and owner.portal_url != settings.PORTAL_URL:
+        all_targets = list(remaining_members)
+    
+    for target in remaining_members:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{target.portal_url}/api/webhook/group-list-update",
+                    json={
+                        "group_id": group.group_id,
+                        "owner_portal": settings.PORTAL_URL,
+                        "action": "member_added",
+                        "added_portal": member_portal,
+                        "added_name": member_name,
+                        "members": member_list,
+                        "group_key": group.group_key,
+                        "version": new_version
+                    },
+                    timeout=10.0
+                )
+        except Exception as e:
+            print(f"Failed to push update to {target.portal_url}: {e}")
+    
+    # 也推送给新添加的成员
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{member_portal}/api/webhook/group-list-update",
+                json={
+                    "group_id": group.group_id,
+                    "owner_portal": settings.PORTAL_URL,
+                    "action": "member_added",
+                    "added_portal": member_portal,
+                    "added_name": member_name,
+                    "members": member_list,
+                    "group_key": group.group_key,
+                    "version": new_version
+                },
+                timeout=10.0
+            )
+    except Exception as e:
+        print(f"Failed to push update to new member {member_portal}: {e}")
+    
+    return {
+        "status": "success",
+        "group_id": group.group_id,
+        "added": member_portal,
+        "all_members": member_list
+    }
+
+
+# ========== 6. 获取我加入的群列表（本地缓存）==========
+
+@router.get("/my-groups")
+async def get_my_groups(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    获取当前用户加入的所有群（从本地缓存）
+    """
+    import json
+    
+    # 从 group_member_cache 获取我作为成员的群
+    settings = get_settings()
+    
+    result = await db.execute(
+        select(GroupMemberCache).where(
+            GroupMemberCache.owner_portal != settings.PORTAL_URL  # 我加入的别人的群
+        )
+    )
+    caches = result.scalars().all()
+    
+    my_groups = []
+    for cache in caches:
+        members = json.loads(cache.members_json) if cache.members_json else []
+        my_groups.append({
+            "group_id": cache.group_id,
+            "owner_portal": cache.owner_portal,
+            "member_count": len(members),
+            "members": members,
+            "version": cache.list_version,
+            "updated_at": cache.updated_at.isoformat() if cache.updated_at else None
+        })
+    
+    # 也获取我创建的群（从 groups 表）
+    result = await db.execute(
+        select(Group).where(
+            and_(
+                Group.owner_id == current_user.id,
+                Group.is_active == True
+            )
+        )
+    )
+    owned_groups = result.scalars().all()
+    
+    for group in owned_groups:
+        # 获取成员列表
+        result = await db.execute(
+            select(Contact).join(
+                group_members,
+                Contact.id == group_members.c.contact_id
+            ).where(
+                group_members.c.group_id == group.id
+            )
+        )
+        members_result = result.scalars().all()
+        members = [{"portal": m.portal_url, "display_name": m.display_name} for m in members_result]
+        
+        # 加入群主
+        members.insert(0, {
+            "portal": settings.PORTAL_URL,
+            "display_name": current_user.display_name or "群主"
+        })
+        
+        my_groups.append({
+            "group_id": group.group_id,
+            "owner_portal": settings.PORTAL_URL,
+            "group_name": group.name,
+            "is_owner": True,
+            "member_count": len(members),
+            "members": members,
+            "version": group.version or 1
+        })
+    
+    return {"groups": my_groups}
+
+
+# ========== 7. 接收群列表更新（Webhook）==========
 
 @router.post("/webhook/group-list-update")
 async def receive_group_list_update(
@@ -544,6 +777,7 @@ async def receive_group_list_update(
     group_id = update_data.get("group_id")
     owner_portal = update_data.get("owner_portal")
     group_key = update_data.get("group_key")
+    group_name = update_data.get("group_name", "群组")
     members = update_data.get("members", [])
     version = update_data.get("version", 1)
     signature = update_data.get("signature")
@@ -565,6 +799,7 @@ async def receive_group_list_update(
     if cache:
         cache.owner_portal = owner_portal
         cache.group_key = group_key
+        cache.group_name = group_name
         cache.members_json = json.dumps(members)
         cache.list_version = version
         cache.list_signature = signature
@@ -573,6 +808,7 @@ async def receive_group_list_update(
             group_id=group_id,
             owner_portal=owner_portal,
             group_key=group_key,
+            group_name=group_name,
             members_json=json.dumps(members),
             list_version=version,
             list_signature=signature

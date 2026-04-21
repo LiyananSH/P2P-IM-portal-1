@@ -68,6 +68,7 @@ class Group(Base):
     name = Column(String(100), nullable=False)
     description = Column(Text)
     avatar = Column(String(255))
+    version = Column(Integer, default=1)  # 成员列表版本
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -126,6 +127,7 @@ class GroupMemberCache(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     group_id = Column(String(255), unique=True, nullable=False)  # 全局 group_id
+    group_name = Column(String(100))  # 群名称
     owner_portal = Column(String(255), nullable=False)  # 群主 portal
     group_key = Column(String(255), nullable=False)  # 群密钥
     members_json = Column(Text)  # 成员列表 JSON [{"portal": "...", "name": "..."}]
