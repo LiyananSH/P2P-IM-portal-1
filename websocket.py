@@ -259,6 +259,14 @@ async def notify_new_message(user_id: int, message: dict):
     })
 
 
+async def notify_group_message(user_id: int, message: dict):
+    """通知用户有群新消息"""
+    await manager.send_to_user(user_id, {
+        "type": "group_message",
+        "data": message
+    })
+
+
 async def notify_agent_message(agent_user_id: int, message: dict):
     """通知 Agent 有新消息"""
     await manager.send_to_agent(agent_user_id, {
