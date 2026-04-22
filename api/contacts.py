@@ -43,3 +43,33 @@ async def list_contacts(
         contact.last_activity_at = last_activity_at
     
     return contacts
+
+
+@router.delete("/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_contact(
+    contact_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """删除联系人"""
+    result = await db.execute(
+        select(Contact).where(
+            and_(
+                Contact.id == contact_id,
+                Contact.owner_id == current_user.id
+            )
+        )
+    )
+    contact = result.scalar_one_or_none()
+    
+    if not contact:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Contact not found"
+        )
+    
+    # 软删除
+    contact.is_active = False
+    await db.flush()
+    
+    return None
