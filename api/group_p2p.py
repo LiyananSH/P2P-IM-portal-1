@@ -99,6 +99,112 @@ async def receive_group_list_update(
     return {"status": "success", "version": version}
 
 
+# ========== 0.5 接收成员退群通知（Webhook）==========
+
+@router.post("/webhook/member-leave")
+async def receive_member_leave(
+    leave_data: dict,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    接收成员退群通知
+    群主端：从 group_members 删除成员，广播给其他成员
+    """
+    group_id = leave_data.get("group_id")
+    member_portal = leave_data.get("member_portal")
+    member_name = leave_data.get("member_name", "用户")
+    
+    if not all([group_id, member_portal]):
+        raise HTTPException(status_code=400, detail="Missing required fields")
+    
+    # 查找群组
+    result = await db.execute(
+        select(Group).where(
+            and_(
+                Group.group_id == group_id,
+                Group.is_active == True
+            )
+        )
+    )
+    group = result.scalar_one_or_none()
+    
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # 查找并删除成员
+    result = await db.execute(
+        select(Contact).where(
+            and_(
+                Contact.portal_url == member_portal,
+                Contact.is_active == True
+            )
+        )
+    )
+    contact = result.scalar_one_or_none()
+    
+    if contact:
+        await db.execute(
+            delete(group_members).where(
+                and_(
+                    group_members.c.group_id == group.id,
+                    group_members.c.contact_id == contact.id
+                )
+            )
+        )
+        await db.flush()
+    
+    # 获取更新后的成员列表
+    result = await db.execute(
+        select(Contact).join(
+            group_members,
+            Contact.id == group_members.c.contact_id
+        ).where(
+            group_members.c.group_id == group.id
+        )
+    )
+    remaining_members = result.scalars().all()
+    
+    member_list = [{
+        "portal": m.portal_url,
+        "display_name": m.display_name
+    } for m in remaining_members]
+    
+    # 加入群主
+    settings = get_settings()
+    result = await db.execute(select(User).where(User.id == group.owner_id))
+    owner = result.scalar_one_or_none()
+    if owner:
+        member_list.insert(0, {
+            "portal": settings.PORTAL_URL,
+            "display_name": owner.display_name or "群主"
+        })
+    
+    # 广播给所有剩余成员
+    new_version = (group.version or 1) + 1
+    
+    for member in remaining_members:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{member.portal_url}/api/groups/webhook/group-list-update",
+                    json={
+                        "group_id": group.group_id,
+                        "db_id": group.id,
+                        "owner_portal": settings.PORTAL_URL,
+                        "action": "member_removed",
+                        "removed_portal": member_portal,
+                        "members": member_list,
+                        "group_key": group.group_key,
+                        "version": new_version
+                    },
+                    timeout=10.0
+                )
+        except Exception as e:
+            print(f"Failed to broadcast to {member.portal_url}: {e}")
+    
+    return {"status": "success", "message": "Member left and notified"}
+
+
 # ========== 1. 获取我加入的群列表（必须在 /{group_id} 路由之前）==========
 
 @router.get("/my-groups")
@@ -1130,3 +1236,51 @@ async def send_message_by_uuid(
         "failed": failed_members,
         "total_members": len(members)
     }
+
+
+# ========== 10. 成员主动退群 ==========
+
+@router.post("/by-uuid/{group_uuid}/leave")
+async def leave_group(
+    group_uuid: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    成员主动退出群聊
+    通知群主，群主广播给其他成员
+    """
+    settings = get_settings()
+    member_portal = settings.PORTAL_URL
+    
+    # 从缓存获取群信息
+    result = await db.execute(
+        select(GroupMemberCache).where(
+            GroupMemberCache.group_id == group_uuid
+        )
+    )
+    cache = result.scalar_one_or_none()
+    
+    if not cache:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # 通知群主
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{cache.owner_portal}/api/groups/webhook/member-leave",
+                json={
+                    "group_id": group_uuid,
+                    "member_portal": member_portal,
+                    "member_name": current_user.display_name or "用户"
+                },
+                timeout=10.0
+            )
+    except Exception as e:
+        print(f"Failed to notify owner: {e}")
+    
+    # 删除自己的缓存记录
+    await db.delete(cache)
+    await db.flush()
+    
+    return {"status": "success", "message": "Left group"}
