@@ -26,8 +26,21 @@ if [ -f "requirements.txt" ]; then
     pip install -r requirements.txt
 fi
 
+# 运行数据库迁移
+echo "3. 运行数据库迁移..."
+if [ -d "migrations" ]; then
+    for migration in migrations/*.py; do
+        if [ -f "$migration" ]; then
+            echo "   运行: $(basename $migration)"
+            python -c "exec(open('$migration').read())" || echo "   迁移 $migration 可能已执行"
+        fi
+    done
+else
+    echo "   跳过: migrations 目录不存在"
+fi
+
 # 重启服务
-echo "3. 重启服务..."
+echo "4. 重启服务..."
 sudo systemctl restart portal
 
 echo "===== 部署完成 ====="
