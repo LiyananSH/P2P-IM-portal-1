@@ -24,13 +24,22 @@ async def list_contacts(
     )
     contacts = result.scalars().all()
     
-    # 获取每个联系人的最后消息时间
+    # 获取每个联系人的最后活动时间
     for contact in contacts:
         last_msg = await db.execute(
             select(func.max(Message.created_at)).where(
                 Message.contact_id == contact.id
             )
         )
-        contact.last_message_at = last_msg.scalar()
+        last_message_at = last_msg.scalar()
+        
+        # 计算最后活动时间：取消息时间和更新时间/创建时间的最大值
+        last_activity_at = last_message_at
+        if contact.updated_at and (last_activity_at is None or contact.updated_at > last_activity_at):
+            last_activity_at = contact.updated_at
+        if contact.created_at and (last_activity_at is None or contact.created_at > last_activity_at):
+            last_activity_at = contact.created_at
+        
+        contact.last_activity_at = last_activity_at
     
     return contacts

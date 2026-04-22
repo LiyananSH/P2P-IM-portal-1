@@ -97,6 +97,11 @@ async def my_groups(
         )
         last_message_at = last_msg.scalar()
         
+        # 计算最后活动时间：取消息时间和创建时间的最大值
+        last_activity_at = last_message_at
+        if last_activity_at is None or g.created_at > last_activity_at:
+            last_activity_at = g.created_at
+        
         result_groups.append({
             "id": g.id,
             "group_id": g.group_id,
@@ -109,7 +114,7 @@ async def my_groups(
             "created_at": g.created_at,
             "member_count": len(members),
             "is_owner": True,
-            "last_message_at": last_message_at
+            "last_activity_at": last_activity_at
         })
     
     # 2. 我作为成员加入的群组
@@ -149,6 +154,11 @@ async def my_groups(
         )
         last_message_at = last_msg.scalar()
         
+        # 计算最后活动时间
+        last_activity_at = last_message_at
+        if last_activity_at is None or g.created_at > last_activity_at:
+            last_activity_at = g.created_at
+        
         result_groups.append({
             "id": g.id,
             "group_id": g.group_id,
@@ -161,7 +171,7 @@ async def my_groups(
             "created_at": g.created_at,
             "member_count": len(members),
             "is_owner": False,
-            "last_message_at": last_message_at
+            "last_activity_at": last_activity_at
         })
     
     return result_groups
