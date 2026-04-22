@@ -1,12 +1,21 @@
 #!/bin/bash
 # P2P Portal 一键部署脚本
 # 使用方法: sudo ./deploy.sh
+# 
+# ⚠️ 重要说明：
+# - 本脚本不会删除任何数据
+# - 本脚本不会删除数据库文件
+# - 本脚本只添加新列（如果不存在）
+# - 建议先备份数据库：cp portal.db portal.db.backup
 
 set -e  # 遇到错误立即退出
 
 echo "========================================"
 echo "  P2P Portal 部署脚本"
 echo "========================================"
+echo ""
+echo "⚠️  本脚本不会删除数据库或数据！"
+echo "⚠️  只执行：更新代码 + 添加新列 + 重启服务"
 echo ""
 
 # 检查是否以 root 运行
@@ -19,6 +28,15 @@ fi
 PORTAL_DIR="/opt/portal"
 DB_FILE="$PORTAL_DIR/portal.db"
 SERVICE_NAME="portal"
+
+# 可选：备份数据库
+if [ -f "$DB_FILE" ]; then
+    BACKUP_FILE="$PORTAL_DIR/portal.db.backup.$(date +%Y%m%d_%H%M%S)"
+    echo "💾 备份数据库到: $BACKUP_FILE"
+    cp $DB_FILE $BACKUP_FILE
+    echo "✅ 备份完成"
+    echo ""
+fi
 
 echo "[1/5] 更新代码..."
 cd $PORTAL_DIR
