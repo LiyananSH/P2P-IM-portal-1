@@ -541,13 +541,29 @@ async def receive_group_message(
     else:
         raise HTTPException(status_code=404, detail="Group not found")
     
-    # 验证发送者在成员列表中（如果有缓存）
+    # 验证发送者在成员列表中
     if cache and cache.members_json:
         import json
         members = json.loads(cache.members_json)
         member_portals = [m.get("portal") for m in members]
         
         if sender_portal not in member_portals:
+            raise HTTPException(status_code=403, detail="Sender not in group members")
+    elif group:
+        # 群主：验证发送者在 group_members 表中
+        result = await db.execute(
+            select(Contact).join(
+                group_members,
+                Contact.id == group_members.c.contact_id
+            ).where(
+                and_(
+                    group_members.c.group_id == group.id,
+                    Contact.portal_url == sender_portal
+                )
+            )
+        )
+        member = result.scalar_one_or_none()
+        if not member:
             raise HTTPException(status_code=403, detail="Sender not in group members")
     
     # 验证签名
