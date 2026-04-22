@@ -1,10 +1,10 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_, func
 
 from database import get_db
-from models import User, Contact
+from models import User, Contact, Message
 from schemas import ContactCreate, ContactUpdate, ContactResponse
 from auth import get_current_user
 
@@ -23,6 +23,26 @@ async def list_contacts(
         )
     )
     contacts = result.scalars().all()
+    
+    # 获取每个联系人的最后消息时间
+    for contact in contacts:
+        # 查询与该联系人的最后消息
+        last_msg = await db.execute(
+            select(func.max(Message.created_at)).where(
+                or_(
+                    and_(
+                        Message.sender_id == current_user.id,
+                        Message.recipient_portal == contact.portal_url
+                    ),
+                    and_(
+                        Message.sender_portal == contact.portal_url,
+                        Message.recipient_portal == current_user.portal_url
+                    )
+                )
+            )
+        )
+        contact.last_message_at = last_msg.scalar()
+    
     return contacts
 
 

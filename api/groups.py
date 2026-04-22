@@ -2,10 +2,10 @@ from typing import List
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_, func
 
 from database import get_db
-from models import User, Group, Contact, group_members
+from models import User, Group, Contact, group_members, GroupMessage
 from schemas import GroupCreate, GroupUpdate, GroupResponse, GroupMemberAdd, GroupInvite, GroupInviteResponse, GroupJoin
 from auth import get_current_user
 from config import get_settings
@@ -56,6 +56,112 @@ async def list_groups(
             "created_at": g.created_at,
             "members": member_list,
             "member_count": len(member_list)
+        })
+    
+    return result_groups
+
+
+@router.get("/my-groups")
+async def my_groups(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """获取我参与的所有群组（包括我创建的和我加入的）"""
+    result_groups = []
+    
+    # 1. 我创建的群组
+    owned = await db.execute(
+        select(Group).where(
+            and_(Group.owner_id == current_user.id, Group.is_active == True)
+        )
+    )
+    owned_groups = owned.scalars().all()
+    
+    for g in owned_groups:
+        # 查询成员数量
+        members_result = await db.execute(
+            select(Contact).join(
+                group_members,
+                Contact.id == group_members.c.contact_id
+            ).where(
+                group_members.c.group_id == g.id
+            )
+        )
+        members = members_result.scalars().all()
+        
+        # 查询最后消息时间
+        last_msg = await db.execute(
+            select(func.max(GroupMessage.created_at)).where(
+                GroupMessage.group_id == g.id
+            )
+        )
+        last_message_at = last_msg.scalar()
+        
+        result_groups.append({
+            "id": g.id,
+            "group_id": g.group_id,
+            "db_id": g.id,
+            "owner_id": g.owner_id,
+            "name": g.name,
+            "description": g.description,
+            "avatar": g.avatar,
+            "is_active": g.is_active,
+            "created_at": g.created_at,
+            "member_count": len(members),
+            "is_owner": True,
+            "last_message_at": last_message_at
+        })
+    
+    # 2. 我作为成员加入的群组
+    member_groups = await db.execute(
+        select(Group).join(
+            group_members,
+            Group.id == group_members.c.group_id
+        ).where(
+            and_(
+                group_members.c.contact_id.in_(
+                    select(Contact.id).where(Contact.owner_id == current_user.id)
+                ),
+                Group.owner_id != current_user.id,
+                Group.is_active == True
+            )
+        )
+    )
+    member_groups_list = member_groups.scalars().all()
+    
+    for g in member_groups_list:
+        # 查询成员数量
+        members_result = await db.execute(
+            select(Contact).join(
+                group_members,
+                Contact.id == group_members.c.contact_id
+            ).where(
+                group_members.c.group_id == g.id
+            )
+        )
+        members = members_result.scalars().all()
+        
+        # 查询最后消息时间
+        last_msg = await db.execute(
+            select(func.max(GroupMessage.created_at)).where(
+                GroupMessage.group_id == g.id
+            )
+        )
+        last_message_at = last_msg.scalar()
+        
+        result_groups.append({
+            "id": g.id,
+            "group_id": g.group_id,
+            "db_id": g.id,
+            "owner_id": g.owner_id,
+            "name": g.name,
+            "description": g.description,
+            "avatar": g.avatar,
+            "is_active": g.is_active,
+            "created_at": g.created_at,
+            "member_count": len(members),
+            "is_owner": False,
+            "last_message_at": last_message_at
         })
     
     return result_groups
