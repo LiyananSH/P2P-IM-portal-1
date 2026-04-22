@@ -90,7 +90,8 @@ async def create_group(
     db.add(new_group)
     await db.flush()
     
-    # 添加成员
+    # 添加成员并发送邀请
+    invited_count = 0
     if group_data.member_ids:
         for contact_id in group_data.member_ids:
             result = await db.execute(
@@ -104,12 +105,35 @@ async def create_group(
             )
             contact = result.scalar_one_or_none()
             if contact:
+                # 添加到群成员
                 await db.execute(
                     group_members.insert().values(
                         group_id=new_group.id,
                         contact_id=contact.id
                     )
                 )
+                
+                # 发送邀请通知
+                shared_key = f"group_{secrets.token_hex(32)}"
+                try:
+                    async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                            f"{contact.portal_url}/api/groups/invite/receive",
+                            json={
+                                "group_id": new_group.group_id,
+                                "group_db_id": new_group.id,
+                                "group_name": new_group.name,
+                                "inviter_portal": settings.PORTAL_URL,
+                                "invitee_portal": contact.portal_url,
+                                "shared_key": shared_key,
+                                "timestamp": datetime.utcnow().isoformat()
+                            },
+                            timeout=10.0
+                        )
+                        if response.status_code == 200:
+                            invited_count += 1
+                except Exception as e:
+                    print(f"Failed to send invite to {contact.portal_url}: {e}")
         await db.flush()
     
     return {
@@ -122,7 +146,8 @@ async def create_group(
         "avatar": new_group.avatar,
         "is_active": new_group.is_active,
         "created_at": new_group.created_at,
-        "members": []
+        "members": [],
+        "invited_count": invited_count
     }
 
 
