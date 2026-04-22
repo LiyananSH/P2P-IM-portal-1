@@ -91,11 +91,46 @@ async def list_messages(
         query = query.where(
             or_(
                 and_(Message.sender_id == current_user.id, Message.contact_id == contact_id),
-                # 这里简化处理，实际应该关联查询
             )
         )
     
     query = query.order_by(desc(Message.created_at)).limit(limit).offset(offset)
+    result = await db.execute(query)
+    messages = result.scalars().all()
+    return messages
+
+
+@router.get("/portal/{portal_url:path}", response_model=List[MessageResponse])
+async def get_messages_by_portal(
+    portal_url: str,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """通过对方 portal URL 获取消息"""
+    # 查找对应的联系人
+    result = await db.execute(
+        select(Contact).where(
+            and_(
+                Contact.owner_id == current_user.id,
+                Contact.portal_url == portal_url
+            )
+        )
+    )
+    contact = result.scalar_one_or_none()
+    
+    if not contact:
+        return []
+    
+    # 获取与该联系人的消息
+    query = select(Message).where(
+        or_(
+            and_(Message.sender_id == current_user.id, Message.contact_id == contact.id),
+            and_(Message.sender_portal == portal_url, Message.contact_id == contact.id)
+        )
+    ).order_by(Message.created_at).limit(limit).offset(offset)
+    
     result = await db.execute(query)
     messages = result.scalars().all()
     return messages
@@ -320,6 +355,24 @@ async def mark_as_read(
 
 # ========== 群聊消息 ==========
 
+@router.get("/group/by-uuid/{group_uuid}", response_model=List[GroupMessageResponse])
+async def list_group_messages_by_uuid(
+    group_uuid: str,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """通过 UUID 获取群聊消息（用于加入的群）"""
+    result = await db.execute(
+        select(GroupMessage).where(
+            GroupMessage.group_uuid == group_uuid
+        ).order_by(GroupMessage.created_at).limit(limit).offset(offset)
+    )
+    messages = result.scalars().all()
+    return messages
+
+
 @router.get("/group/{group_id}", response_model=List[GroupMessageResponse])
 async def list_group_messages(
     group_id: int,
@@ -351,24 +404,6 @@ async def list_group_messages(
         select(GroupMessage).where(
             GroupMessage.group_id == group_id
         ).order_by(desc(GroupMessage.created_at)).limit(limit).offset(offset)
-    )
-    messages = result.scalars().all()
-    return messages
-
-
-@router.get("/group/by-uuid/{group_uuid}", response_model=List[GroupMessageResponse])
-async def list_group_messages_by_uuid(
-    group_uuid: str,
-    limit: int = 50,
-    offset: int = 0,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """通过 UUID 获取群聊消息（用于加入的群）"""
-    result = await db.execute(
-        select(GroupMessage).where(
-            GroupMessage.group_uuid == group_uuid
-        ).order_by(GroupMessage.created_at).limit(limit).offset(offset)
     )
     messages = result.scalars().all()
     return messages
