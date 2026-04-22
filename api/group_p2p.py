@@ -99,6 +99,37 @@ async def receive_group_list_update(
     return {"status": "success", "version": version}
 
 
+# ========== 0.6 接收解散群通知（Webhook）==========
+
+@router.post("/webhook/group-dissolved")
+async def receive_group_dissolved(
+    dissolve_data: dict,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    接收群主解散群聊的通知
+    成员端：删除本地缓存
+    """
+    group_id = dissolve_data.get("group_id")
+    
+    if not group_id:
+        raise HTTPException(status_code=400, detail="Missing group_id")
+    
+    # 删除本地缓存
+    result = await db.execute(
+        select(GroupMemberCache).where(
+            GroupMemberCache.group_id == group_id
+        )
+    )
+    cache = result.scalar_one_or_none()
+    
+    if cache:
+        await db.delete(cache)
+        await db.flush()
+    
+    return {"status": "success", "message": "Group cache deleted"}
+
+
 # ========== 0.5 接收成员退群通知（Webhook）==========
 
 @router.post("/webhook/member-leave")
@@ -829,6 +860,78 @@ async def remove_member(
         "group_id": group.group_id,
         "removed": member_portal,
         "remaining_members": member_list
+    }
+
+
+# ========== 4b. 群主解散群 ==========
+
+@router.post("/{group_id}/dissolve")
+async def dissolve_group(
+    group_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    群主解散群聊
+    将群标记为非活跃，通知所有成员删除本地缓存
+    """
+    settings = get_settings()
+    
+    # 获取群信息
+    result = await db.execute(
+        select(Group).where(
+            and_(
+                Group.id == group_id,
+                Group.is_active == True
+            )
+        )
+    )
+    group = result.scalar_one_or_none()
+    
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+    
+    # 验证是群主
+    if group.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only owner can dissolve group")
+    
+    # 获取所有成员
+    result = await db.execute(
+        select(Contact).join(
+            group_members,
+            Contact.id == group_members.c.contact_id
+        ).where(
+            group_members.c.group_id == group_id
+        )
+    )
+    members = result.scalars().all()
+    
+    # 标记群为非活跃
+    group.is_active = False
+    await db.flush()
+    
+    # 广播解散消息给所有成员
+    for member in members:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{member.portal_url}/api/groups/webhook/group-dissolved",
+                    json={
+                        "group_id": group.group_id,
+                        "action": "group_dissolved"
+                    },
+                    timeout=10.0
+                )
+        except Exception as e:
+            print(f"Failed to notify {member.portal_url}: {e}")
+    
+    # 也通知群主自己
+    # （本地缓存由前端处理删除）
+    
+    return {
+        "status": "success",
+        "group_id": group.group_id,
+        "message": "Group dissolved"
     }
 
 
