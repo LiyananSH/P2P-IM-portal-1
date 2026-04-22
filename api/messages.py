@@ -100,6 +100,39 @@ async def list_messages(
     return messages
 
 
+@router.get("/contact/{contact_id:int}", response_model=List[MessageResponse])
+async def get_messages_by_contact(
+    contact_id: int,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """通过 contact_id 获取消息"""
+    # 验证联系人属于当前用户
+    result = await db.execute(
+        select(Contact).where(
+            and_(
+                Contact.id == contact_id,
+                Contact.owner_id == current_user.id
+            )
+        )
+    )
+    contact = result.scalar_one_or_none()
+    
+    if not contact:
+        return []
+    
+    # 获取与该联系人的消息
+    query = select(Message).where(
+        Message.contact_id == contact_id
+    ).order_by(Message.created_at).limit(limit).offset(offset)
+    
+    result = await db.execute(query)
+    messages = result.scalars().all()
+    return messages
+
+
 @router.get("/portal/{portal_url:path}", response_model=List[MessageResponse])
 async def get_messages_by_portal(
     portal_url: str,
@@ -183,15 +216,8 @@ async def send_message(
     db.add(new_message)
     await db.flush()
     
-    # WebSocket 实时推送给用户
-    await notify_new_message(current_user.id, {
-        "id": new_message.id,
-        "contact_id": contact.id,
-        "content": new_message.content,
-        "message_type": new_message.message_type,
-        "is_from_owner": True,
-        "created_at": new_message.created_at.isoformat()
-    })
+    # 不需要通知发送者（自己发的消息已经显示了）
+    # WebSocket 通知只给接收者（通过对方 Portal 的 /receive 端点触发）
     
     # 转发给 Agent（后台任务）
     background_tasks.add_task(
@@ -282,6 +308,7 @@ async def receive_message(
     # 创建消息（标记为来自联系人，不是主人）
     new_message = Message(
         sender_id=current_user.id,  # 用当前用户作为占位
+        sender_portal=from_portal,  # 保存发送者的 portal
         contact_id=contact.id,
         content=content,
         message_type=message_data.get("message_type", "text"),
@@ -295,14 +322,18 @@ async def receive_message(
     await db.flush()
     
     # 通过 WebSocket 推送给接收者
+    print(f"[WS_NOTIFY] Sending to user {current_user.id}, portal_url={from_portal}, sender_name={sender_name}")
     await notify_new_message(current_user.id, {
         "id": new_message.id,
+        "portal_url": from_portal,
+        "sender_name": sender_name,
         "contact_id": contact.id,
         "content": new_message.content,
         "message_type": new_message.message_type,
         "is_from_owner": False,
         "created_at": new_message.created_at.isoformat()
     })
+    print(f"[WS_NOTIFY] Sent successfully")
     
     return new_message
 
