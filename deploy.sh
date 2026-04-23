@@ -45,14 +45,33 @@ echo "✅ 代码更新完成"
 echo ""
 
 echo "[2/5] 检查并更新数据库结构..."
-# 检查 sender_portal 列是否存在
-if sqlite3 $DB_FILE ".schema messages" | grep -q "sender_portal"; then
-    echo "✅ sender_portal 列已存在"
-else
-    echo "📝 添加 sender_portal 列..."
-    sqlite3 $DB_FILE "ALTER TABLE messages ADD COLUMN sender_portal VARCHAR(255);"
-    echo "✅ 数据库更新完成"
-fi
+# 使用 Python 检查并添加 sender_portal 列（服务器没有 sqlite3 命令）
+python3 << 'EOF'
+import sqlite3
+import sys
+
+db_file = "/opt/portal/portal.db"
+try:
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    
+    # 检查 sender_portal 列是否存在
+    cursor.execute("PRAGMA table_info(messages)")
+    columns = [row[1] for row in cursor.fetchall()]
+    
+    if "sender_portal" in columns:
+        print("✅ sender_portal 列已存在")
+    else:
+        print("📝 添加 sender_portal 列...")
+        cursor.execute("ALTER TABLE messages ADD COLUMN sender_portal VARCHAR(255)")
+        conn.commit()
+        print("✅ 数据库更新完成")
+    
+    conn.close()
+except Exception as e:
+    print(f"❌ 数据库更新失败: {e}")
+    sys.exit(1)
+EOF
 echo ""
 
 echo "[3/5] 清除 Python 缓存..."
