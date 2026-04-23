@@ -115,10 +115,20 @@ async def process_message(websocket: WebSocket, user_id: int, data: dict, is_age
         # 正在输入状态
         await handle_typing_status(user_id, data.get("data", {}))
     
+    elif msg_type == "agent_message":
+        # 用户发送给 Agent 的消息
+        if not is_agent:
+            await handle_agent_message_from_user(user_id, data)
+        else:
+            await websocket.send_json({
+                "type": "error",
+                "data": {"message": "Only user can send agent_message"}
+            })
+    
     elif msg_type == "agent_response":
         # Agent 回复消息（仅 Agent 可发送）
         if is_agent:
-            await handle_agent_response(user_id, data.get("data", {}))
+            await handle_agent_response(user_id, data)
         else:
             await websocket.send_json({
                 "type": "error",
@@ -160,6 +170,45 @@ async def handle_agent_message(websocket: WebSocket, user_id: int, data: dict):
         "type": "ack",
         "data": {"message": "Agent message received"}
     })
+
+
+async def handle_agent_message_from_user(user_id: int, data: dict):
+    """处理用户发送给 Agent 的消息
+    转发给已连接的 Agent（p2p-channel-plugin）
+    """
+    content = data.get("content", "")
+    timestamp = data.get("timestamp", "")
+    
+    print(f"[AGENT_MSG] User {user_id} -> Agent: {content[:50]}...")
+    
+    # 转发给所有已连接的 Agent（p2p-channel-plugin）
+    agent_forwarded = False
+    for agent_user_id, agent_ws in manager.agent_connections.items():
+        try:
+            await agent_ws.send_json({
+                "type": "agent_message",
+                "user_id": user_id,
+                "content": content,
+                "timestamp": timestamp
+            })
+            agent_forwarded = True
+            print(f"[AGENT_MSG] Forwarded to Agent {agent_user_id}")
+        except Exception as e:
+            print(f"[AGENT_MSG] Failed to forward to Agent {agent_user_id}: {e}")
+    
+    # 通知用户消息已转发
+    if user_id in manager.user_connections:
+        user_ws = manager.user_connections[user_id]
+        if agent_forwarded:
+            await user_ws.send_json({
+                "type": "ack",
+                "data": {"message": "Message forwarded to Agent"}
+            })
+        else:
+            await user_ws.send_json({
+                "type": "error",
+                "data": {"message": "No Agent connected"}
+            })
 
 
 async def handle_agent_response(agent_user_id: int, data: dict):
@@ -211,7 +260,7 @@ async def handle_agent_response(agent_user_id: int, data: dict):
             db.add(message)
             await db.flush()
             
-            # 推送给用户
+            # 推送给用户（普通联系人消息）
             await notify_new_message(target_user_id, {
                 "id": message.id,
                 "contact_id": contact.id,
@@ -220,6 +269,15 @@ async def handle_agent_response(agent_user_id: int, data: dict):
                 "is_from_owner": False,
                 "created_at": message.created_at.isoformat()
             })
+            
+            # 同时发送 agent_reply（My Agent 聊天窗口）
+            if target_user_id in manager.user_connections:
+                user_ws = manager.user_connections[target_user_id]
+                await user_ws.send_json({
+                    "type": "agent_reply",
+                    "content": content,
+                    "timestamp": message.created_at.isoformat()
+                })
 
 
 async def forward_to_agent(user_id: int, contact_id: int, content: str):
