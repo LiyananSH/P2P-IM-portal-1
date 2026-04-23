@@ -1,40 +1,94 @@
 #!/usr/bin/env python3
 """
-数据库初始化/迁移脚本
-确保数据库结构是最新的
+数据库迁移脚本
+检查并添加所有缺失的列，确保数据库结构与代码同步
+支持从任意版本平滑升级到最新版本
 """
 
 import sqlite3
 import sys
+from datetime import datetime
 
-def init_database(db_path="/opt/portal/portal.db"):
-    """初始化数据库，添加缺失的列"""
+def get_table_columns(cursor, table_name):
+    """获取表的列信息"""
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    return {row[1] for row in cursor.fetchall()}
+
+def migrate_messages_table(cursor):
+    """迁移 messages 表，添加缺失的列"""
+    columns = get_table_columns(cursor, "messages")
+    
+    migrations = {
+        'sender_portal': 'VARCHAR(255)',  # 发送者 Portal URL（用于跨 Portal 消息追踪）
+    }
+    
+    print(f"[DB] messages 表当前列: {sorted(columns)}")
+    
+    for col_name, col_type in migrations.items():
+        if col_name not in columns:
+            print(f"[DB] 添加列: {col_name} ({col_type})...")
+            cursor.execute(f"ALTER TABLE messages ADD COLUMN {col_name} {col_type}")
+            print(f"[DB] ✅ {col_name} 列添加成功")
+        else:
+            print(f"[DB] ✅ {col_name} 列已存在")
+
+def migrate_group_messages_table(cursor):
+    """迁移 group_messages 表，添加缺失的列"""
+    columns = get_table_columns(cursor, "group_messages")
+    
+    migrations = {
+        # 根据需要添加更多迁移
+    }
+    
+    print(f"[DB] group_messages 表当前列: {sorted(columns)}")
+    
+    for col_name, col_type in migrations.items():
+        if col_name not in columns:
+            print(f"[DB] 添加列: {col_name} ({col_type})...")
+            cursor.execute(f"ALTER TABLE messages ADD COLUMN {col_name} {col_type}")
+            print(f"[DB] ✅ {col_name} 列添加成功")
+        else:
+            print(f"[DB] ✅ {col_name} 列已存在")
+
+def migrate_all(db_path="/opt/portal/portal.db"):
+    """执行所有迁移"""
+    print(f"[DB] 连接到数据库: {db_path}")
+    print(f"[DB] 迁移时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("-" * 50)
+    
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
-    print(f"[DB] 连接到数据库: {db_path}")
-    
-    # 获取 messages 表的当前结构
-    cursor.execute("PRAGMA table_info(messages)")
-    columns = [row[1] for row in cursor.fetchall()]
-    print(f"[DB] 当前 messages 表列: {columns}")
-    
-    # 添加缺失的列
-    required_columns = {
-        'sender_portal': 'VARCHAR(255)',
-    }
-    
-    for col, col_type in required_columns.items():
-        if col not in columns:
-            print(f"[DB] 添加列: {col}")
-            cursor.execute(f"ALTER TABLE messages ADD COLUMN {col} {col_type}")
-        else:
-            print(f"[DB] 列已存在: {col}")
-    
-    conn.commit()
-    conn.close()
-    print("[DB] 数据库初始化完成")
+    try:
+        # 迁移 messages 表
+        print("[DB] 检查 messages 表...")
+        migrate_messages_table(cursor)
+        
+        # 迁移 group_messages 表
+        print("[DB] 检查 group_messages 表...")
+        migrate_group_messages_table(cursor)
+        
+        conn.commit()
+        print("-" * 50)
+        print("[DB] ✅ 所有迁移完成！")
+        
+    except Exception as e:
+        print(f"[DB] ❌ 迁移失败: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     db_path = sys.argv[1] if len(sys.argv) > 1 else "/opt/portal/portal.db"
-    init_database(db_path)
+    
+    print("=" * 50)
+    print("  P2P Portal 数据库迁移脚本")
+    print("=" * 50)
+    
+    try:
+        migrate_all(db_path)
+        print("\n[DB] 可以安全退出")
+    except Exception as e:
+        print(f"\n[DB] 迁移异常退出: {e}")
+        sys.exit(1)

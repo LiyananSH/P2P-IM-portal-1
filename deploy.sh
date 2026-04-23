@@ -5,7 +5,8 @@
 # ⚠️ 重要说明：
 # - 本脚本不会删除任何数据
 # - 本脚本不会删除数据库文件
-# - 本脚本只添加新列（如果不存在）
+# - 本脚本自动检查并添加缺失的数据库列
+# - 支持从任意版本平滑升级到最新版本
 # - 建议先备份数据库：cp portal.db portal.db.backup
 
 set -e  # 遇到错误立即退出
@@ -15,7 +16,7 @@ echo "  P2P Portal 部署脚本"
 echo "========================================"
 echo ""
 echo "⚠️  本脚本不会删除数据库或数据！"
-echo "⚠️  只执行：更新代码 + 添加新列 + 重启服务"
+echo "⚠️  自动检查并添加缺失的数据库列"
 echo ""
 
 # 检查是否以 root 运行
@@ -44,34 +45,10 @@ sudo -u ubuntu git pull origin master
 echo "✅ 代码更新完成"
 echo ""
 
-echo "[2/5] 检查并更新数据库结构..."
-# 使用 Python 检查并添加 sender_portal 列（服务器没有 sqlite3 命令）
-python3 << 'EOF'
-import sqlite3
-import sys
-
-db_file = "/opt/portal/portal.db"
-try:
-    conn = sqlite3.connect(db_file)
-    cursor = conn.cursor()
-    
-    # 检查 sender_portal 列是否存在
-    cursor.execute("PRAGMA table_info(messages)")
-    columns = [row[1] for row in cursor.fetchall()]
-    
-    if "sender_portal" in columns:
-        print("✅ sender_portal 列已存在")
-    else:
-        print("📝 添加 sender_portal 列...")
-        cursor.execute("ALTER TABLE messages ADD COLUMN sender_portal VARCHAR(255)")
-        conn.commit()
-        print("✅ 数据库更新完成")
-    
-    conn.close()
-except Exception as e:
-    print(f"❌ 数据库更新失败: {e}")
-    sys.exit(1)
-EOF
+echo "[2/5] 迁移数据库..."
+# 使用 Python 脚本迁移数据库（兼容不同版本）
+python3 $PORTAL_DIR/init_db.py
+echo "✅ 数据库迁移完成"
 echo ""
 
 echo "[3/5] 清除 Python 缓存..."
