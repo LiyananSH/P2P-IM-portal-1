@@ -85,6 +85,7 @@ class Message(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    sender_portal = Column(String(255))  # 发送者 Portal URL（用于跨 Portal 消息追踪）
     contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=False)
     content = Column(Text, nullable=False)
     message_type = Column(String(20), default="text")  # text, file, image
