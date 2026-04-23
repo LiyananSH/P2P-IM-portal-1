@@ -40,28 +40,45 @@ async def forward_to_agent(message_data: dict):
 async def send_to_contact_portal(contact: Contact, message_data: dict):
     """发送消息到对方 Portal"""
     import logging
+    portal_url = contact.portal_url
+    print(f"[SEND_MSG] Starting to send message to {portal_url}")
+    print(f"[SEND_MSG] Contact ID: {contact.id}, shared_key exists: {bool(contact.shared_key)}")
+    
     try:
-        logging.info(f"Sending message to {contact.portal_url}, shared_key: {contact.shared_key[:20] if contact.shared_key else 'None'}")
+        settings = get_settings()
+        from_portal = settings.PORTAL_URL
+        print(f"[SEND_MSG] From portal: {from_portal}")
+        print(f"[SEND_MSG] Sender name: {message_data.get('sender_name')}")
+        
         async with httpx.AsyncClient() as client:
+            request_data = {
+                "from_portal": from_portal,
+                "sender_name": message_data.get("sender_name"),
+                "content": message_data.get("content"),
+                "message_type": message_data.get("message_type", "text"),
+                "file_url": message_data.get("file_url"),
+                "file_name": message_data.get("file_name"),
+                "file_size": message_data.get("file_size"),
+                "timestamp": datetime.utcnow().isoformat(),
+                "signature": contact.shared_key
+            }
+            print(f"[SEND_MSG] Request data: {request_data}")
+            
+            target_url = f"{portal_url}/api/messages/receive"
+            print(f"[SEND_MSG] POST to: {target_url}")
+            
             response = await client.post(
-                f"{contact.portal_url}/api/messages/receive",
-                json={
-                    "from_portal": get_settings().PORTAL_URL,
-                    "sender_name": message_data.get("sender_name"),
-                    "content": message_data.get("content"),
-                    "message_type": message_data.get("message_type", "text"),
-                    "file_url": message_data.get("file_url"),
-                    "file_name": message_data.get("file_name"),
-                    "file_size": message_data.get("file_size"),
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "signature": contact.shared_key  # 简单签名验证
-                },
+                target_url,
+                json=request_data,
                 timeout=10.0
             )
-            logging.info(f"Message sent to {contact.portal_url}, status: {response.status_code}")
+            print(f"[SEND_MSG] Response status: {response.status_code}")
+            print(f"[SEND_MSG] Response body: {response.text[:200]}")
             return response.status_code == 200
     except Exception as e:
-        logging.error(f"Failed to send message to {contact.portal_url}: {e}")
+        print(f"[SEND_MSG] ERROR: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -259,18 +276,24 @@ async def receive_message(
     接收来自其他 Portal 的消息
     跨 Portal 调用，无需用户认证，用 shared_key 验证
     """
+    print(f"[RECEIVE_MSG] Received message: {message_data}")
+    
     from_portal = message_data.get("from_portal")
     sender_name = message_data.get("sender_name")
     content = message_data.get("content")
     signature = message_data.get("signature")  # shared_key
     
+    print(f"[RECEIVE_MSG] from_portal: {from_portal}, sender_name: {sender_name}")
+    
     if not all([from_portal, content]):
+        print("[RECEIVE_MSG] ERROR: Missing required fields")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Missing required fields"
         )
     
     # 查找发送方对应的联系人（通过 portal_url）
+    print(f"[RECEIVE_MSG] Looking for contact with portal_url: {from_portal}")
     result = await db.execute(
         select(Contact).where(
             and_(
@@ -282,10 +305,13 @@ async def receive_message(
     contact = result.scalar_one_or_none()
     
     if not contact:
+        print(f"[RECEIVE_MSG] ERROR: Contact not found for portal: {from_portal}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Contact not found"
         )
+    
+    print(f"[RECEIVE_MSG] Found contact: ID={contact.id}, shared_key exists={bool(contact.shared_key)}")
     
     # 验证 shared_key
     if signature and contact.shared_key and signature != contact.shared_key:
@@ -386,6 +412,9 @@ async def mark_as_read(
 
 # ========== 群聊消息 ==========
 
+# 注意：/group/{group_id} 必须在 /group/uuid/{group_uuid} 之前定义
+# 因为 FastAPI 按顺序匹配路由，数字 ID 会匹配到 uuid 路由
+
 @router.get("/group/{group_id}", response_model=List[GroupMessageResponse])
 async def list_group_messages(
     group_id: int,
@@ -422,7 +451,7 @@ async def list_group_messages(
     return messages
 
 
-@router.get("/group/by-uuid/{group_uuid}", response_model=List[GroupMessageResponse])
+@router.get("/group/uuid/{group_uuid}", response_model=List[GroupMessageResponse])
 async def list_group_messages_by_uuid(
     group_uuid: str,
     limit: int = 50,
