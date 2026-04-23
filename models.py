@@ -94,6 +94,7 @@ class Message(Base):
     is_from_owner = Column(Boolean, default=False)  # 是否来自主人(决定是否转发给 Agent)
     is_read = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.utcnow() + timedelta(hours=8))
+    sender_portal = Column(String(255))  # 发送者 Portal URL（用于跨 Portal 消息追踪）
 
     # 关系
     sender = relationship("User", back_populates="messages", foreign_keys=[sender_id])
