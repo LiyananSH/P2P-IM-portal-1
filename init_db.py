@@ -14,6 +14,25 @@ def get_table_columns(cursor, table_name):
     cursor.execute(f"PRAGMA table_info({table_name})")
     return {row[1] for row in cursor.fetchall()}
 
+def migrate_contacts_table(cursor):
+    """迁移 contacts 表，添加缺失的列"""
+    columns = get_table_columns(cursor, "contacts")
+    
+    migrations = {
+        'remote_display_name': 'VARCHAR(100)',  # 对方自称什么（对方的 User.display_name）
+    }
+    
+    print(f"[DB] contacts 表当前列: {sorted(columns)}")
+    
+    for col_name, col_type in migrations.items():
+        if col_name not in columns:
+            print(f"[DB] 添加列: {col_name} ({col_type})...")
+            cursor.execute(f"ALTER TABLE contacts ADD COLUMN {col_name} {col_type}")
+            print(f"[DB] ✅ {col_name} 列添加成功")
+        else:
+            print(f"[DB] ✅ {col_name} 列已存在")
+
+
 def migrate_messages_table(cursor):
     """迁移 messages 表，添加缺失的列"""
     columns = get_table_columns(cursor, "messages")
@@ -50,6 +69,24 @@ def migrate_group_messages_table(cursor):
         else:
             print(f"[DB] ✅ {col_name} 列已存在")
 
+
+def migrate_contact_requests_table(cursor):
+    """迁移 contact_requests 表，添加/重命名列"""
+    columns = get_table_columns(cursor, "contact_requests")
+    
+    # 添加新列 requester_display_name（如果不存在）
+    if 'requester_display_name' not in columns:
+        print(f"[DB] 添加列: requester_display_name (VARCHAR(100))...")
+        cursor.execute("ALTER TABLE contact_requests ADD COLUMN requester_display_name VARCHAR(100)")
+        # 如果有旧的 requester_name 列，数据迁移到新列
+        if 'requester_name' in columns:
+            cursor.execute("UPDATE contact_requests SET requester_display_name = requester_name")
+            print(f"[DB] ✅ 数据从 requester_name 迁移到 requester_display_name")
+        print(f"[DB] ✅ requester_display_name 列添加成功")
+    else:
+        print(f"[DB] ✅ requester_display_name 列已存在")
+
+
 def migrate_all(db_path="/opt/portal/portal.db"):
     """执行所有迁移"""
     print(f"[DB] 连接到数据库: {db_path}")
@@ -60,6 +97,10 @@ def migrate_all(db_path="/opt/portal/portal.db"):
     cursor = conn.cursor()
     
     try:
+        # 迁移 contacts 表
+        print("[DB] 检查 contacts 表...")
+        migrate_contacts_table(cursor)
+        
         # 迁移 messages 表
         print("[DB] 检查 messages 表...")
         migrate_messages_table(cursor)
@@ -67,6 +108,10 @@ def migrate_all(db_path="/opt/portal/portal.db"):
         # 迁移 group_messages 表
         print("[DB] 检查 group_messages 表...")
         migrate_group_messages_table(cursor)
+        
+        # 迁移 contact_requests 表
+        print("[DB] 检查 contact_requests 表...")
+        migrate_contact_requests_table(cursor)
         
         conn.commit()
         print("-" * 50)
