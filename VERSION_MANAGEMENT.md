@@ -62,6 +62,34 @@
 - 后端: `31a0ac6`
 - 前端: `462c68f`
 
+## 2026-04-23 remote_display_name 字段变更
+
+**变更类型**: B + C（API + 数据库）
+
+**代码变更**:
+- ✅ models.py - 添加 Contact.remote_display_name 字段
+- ✅ models.py - ContactRequest.requester_name → requester_display_name
+- ✅ schemas.py - 更新所有相关的 Schema
+- ✅ contact_requests.py - 更新创建和激活联系人逻辑
+
+**数据库变更**:
+- ✅ init_db.py - contacts.remote_display_name 列迁移
+- ✅ init_db.py - contact_requests.requester_display_name 列迁移
+
+**文档更新**:
+- ✅ init_db.py - 自动迁移
+
+**GitHub 提交**:
+- 后端: `2fe1528`
+
+**其他用户操作**:
+```bash
+cd /opt/portal
+sudo ./deploy.sh
+```
+
+---
+
 ## 用户通知模板
 
 ```
