@@ -99,7 +99,7 @@ async def health_check():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket 连接端点 - 普通用户"""
-    token = websocket.query_params.get("token")
+    token = websocket.query_params.get("token") or websocket.query_params.get("api_key")
     if not token:
         await websocket.close(code=4001, reason="Missing token")
         return
@@ -116,7 +116,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.websocket("/ws/agent")
 async def agent_websocket_endpoint(websocket: WebSocket):
     """WebSocket 连接端点 - Agent 专用"""
-    token = websocket.query_params.get("token")
+    token = websocket.query_params.get("token") or websocket.query_params.get("api_key")
     if not token:
         await websocket.close(code=4001, reason="Missing token")
         return
