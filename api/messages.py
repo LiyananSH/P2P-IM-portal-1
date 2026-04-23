@@ -126,19 +126,21 @@ async def get_messages_by_contact(
     db: AsyncSession = Depends(get_db)
 ):
     """通过 contact_id 获取消息"""
-    # 验证联系人属于当前用户
-    result = await db.execute(
-        select(Contact).where(
-            and_(
-                Contact.id == contact_id,
-                Contact.owner_id == current_user.id
+    # contact_id=0 表示 My Agent，跳过验证
+    if contact_id != 0:
+        # 验证联系人属于当前用户
+        result = await db.execute(
+            select(Contact).where(
+                and_(
+                    Contact.id == contact_id,
+                    Contact.owner_id == current_user.id
+                )
             )
         )
-    )
-    contact = result.scalar_one_or_none()
-    
-    if not contact:
-        return []
+        contact = result.scalar_one_or_none()
+        
+        if not contact:
+            return []
     
     # 获取与该联系人的消息
     query = select(Message).where(
@@ -736,3 +738,56 @@ async def receive_group_message(
     })
     
     return {"status": "success"}
+
+
+@router.post("/owner/reply", response_model=dict)
+async def chat_owner_reply(
+    data: dict,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Agent 回复主人消息
+    用于 p2p-channel 插件发送 Agent 回复到 Portal
+    """
+    content = data.get("content", "")
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Content is required"
+        )
+    
+    try:
+        # 保存消息到数据库（contact_id=0 表示 My Agent）
+        message = Message(
+            sender_id=0,  # 0 表示 Agent
+            contact_id=0,  # 0 表示 My Agent
+            content=content,
+            message_type="text",
+            is_from_owner=False,  # 来自 Agent
+            is_read=False,
+            created_at=datetime.now()
+        )
+        db.add(message)
+        await db.commit()
+        await db.refresh(message)
+        
+        # 通过 WebSocket 通知用户
+        from websocket import manager
+        await manager.send_to_user(current_user.id, {
+            "type": "agent_reply",
+            "content": content,
+            "timestamp": datetime.now().isoformat(),
+            "message_id": message.id
+        })
+        
+        return {
+            "message_id": message.id,
+            "status": "delivered"
+        }
+    except Exception as e:
+        print(f"[CHAT_REPLY] Error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save reply: {str(e)}"
+        )
