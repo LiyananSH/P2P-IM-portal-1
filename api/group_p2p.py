@@ -221,6 +221,7 @@ async def receive_member_leave(
                     json={
                         "group_id": group.group_id,
                         "db_id": group.id,
+                        "group_name": group.name,
                         "owner_portal": settings.PORTAL_URL,
                         "action": "member_removed",
                         "removed_portal": member_portal,
@@ -843,6 +844,7 @@ async def remove_member(
                     json={
                         "group_id": group.group_id,
                         "db_id": group.id,  # 数字ID
+                        "group_name": group.name,
                         "owner_portal": settings.PORTAL_URL,
                         "action": "member_removed",
                         "removed_portal": member_portal,
@@ -1198,6 +1200,7 @@ async def receive_group_accept(
                     json={
                         "group_id": group.group_id,
                         "db_id": group.id,
+                        "group_name": group.name,
                         "owner_portal": settings.PORTAL_URL,
                         "action": "member_added",
                         "added_portal": invitee_portal,
@@ -1219,6 +1222,7 @@ async def receive_group_accept(
                 json={
                     "group_id": group.group_id,
                     "db_id": group.id,
+                    "group_name": group.name,
                     "owner_portal": settings.PORTAL_URL,
                     "action": "member_added",
                     "added_portal": invitee_portal,
