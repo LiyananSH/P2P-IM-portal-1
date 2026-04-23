@@ -64,7 +64,6 @@ class ContactResponse(ContactBase):
     avatar: Optional[str]
     is_active: bool
     created_at: datetime
-    last_message_at: Optional[datetime] = None
     
     class Config:
         from_attributes = True

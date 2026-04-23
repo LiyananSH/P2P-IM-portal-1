@@ -2,10 +2,10 @@ from typing import List
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import select, and_
 
 from database import get_db
-from models import User, Group, Contact, group_members, GroupMessage
+from models import User, Group, Contact, group_members
 from schemas import GroupCreate, GroupUpdate, GroupResponse, GroupMemberAdd, GroupInvite, GroupInviteResponse, GroupJoin
 from auth import get_current_user
 from config import get_settings
@@ -61,122 +61,6 @@ async def list_groups(
     return result_groups
 
 
-@router.get("/my-groups")
-async def my_groups(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """获取我参与的所有群组（包括我创建的和我加入的）"""
-    result_groups = []
-    
-    # 1. 我创建的群组
-    owned = await db.execute(
-        select(Group).where(
-            and_(Group.owner_id == current_user.id, Group.is_active == True)
-        )
-    )
-    owned_groups = owned.scalars().all()
-    
-    for g in owned_groups:
-        # 查询成员数量
-        members_result = await db.execute(
-            select(Contact).join(
-                group_members,
-                Contact.id == group_members.c.contact_id
-            ).where(
-                group_members.c.group_id == g.id
-            )
-        )
-        members = members_result.scalars().all()
-        
-        # 查询最后消息时间
-        last_msg = await db.execute(
-            select(func.max(GroupMessage.created_at)).where(
-                GroupMessage.group_id == g.id
-            )
-        )
-        last_message_at = last_msg.scalar()
-        
-        # 计算最后活动时间：取消息时间和创建时间的最大值
-        last_activity_at = last_message_at
-        if last_activity_at is None or g.created_at > last_activity_at:
-            last_activity_at = g.created_at
-        
-        result_groups.append({
-            "id": g.id,
-            "group_id": g.group_id,
-            "db_id": g.id,
-            "owner_id": g.owner_id,
-            "name": g.name,
-            "description": g.description,
-            "avatar": g.avatar,
-            "is_active": g.is_active,
-            "created_at": g.created_at,
-            "member_count": len(members),
-            "is_owner": True,
-            "last_activity_at": last_activity_at
-        })
-    
-    # 2. 我作为成员加入的群组
-    member_groups = await db.execute(
-        select(Group).join(
-            group_members,
-            Group.id == group_members.c.group_id
-        ).where(
-            and_(
-                group_members.c.contact_id.in_(
-                    select(Contact.id).where(Contact.owner_id == current_user.id)
-                ),
-                Group.owner_id != current_user.id,
-                Group.is_active == True
-            )
-        )
-    )
-    member_groups_list = member_groups.scalars().all()
-    
-    for g in member_groups_list:
-        # 查询成员数量
-        members_result = await db.execute(
-            select(Contact).join(
-                group_members,
-                Contact.id == group_members.c.contact_id
-            ).where(
-                group_members.c.group_id == g.id
-            )
-        )
-        members = members_result.scalars().all()
-        
-        # 查询最后消息时间
-        last_msg = await db.execute(
-            select(func.max(GroupMessage.created_at)).where(
-                GroupMessage.group_id == g.id
-            )
-        )
-        last_message_at = last_msg.scalar()
-        
-        # 计算最后活动时间
-        last_activity_at = last_message_at
-        if last_activity_at is None or g.created_at > last_activity_at:
-            last_activity_at = g.created_at
-        
-        result_groups.append({
-            "id": g.id,
-            "group_id": g.group_id,
-            "db_id": g.id,
-            "owner_id": g.owner_id,
-            "name": g.name,
-            "description": g.description,
-            "avatar": g.avatar,
-            "is_active": g.is_active,
-            "created_at": g.created_at,
-            "member_count": len(members),
-            "is_owner": False,
-            "last_activity_at": last_activity_at
-        })
-    
-    return result_groups
-
-
 @router.post("", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def create_group(
     group_data: GroupCreate,
@@ -206,8 +90,7 @@ async def create_group(
     db.add(new_group)
     await db.flush()
     
-    # 添加成员并发送邀请
-    invited_count = 0
+    # 添加成员
     if group_data.member_ids:
         for contact_id in group_data.member_ids:
             result = await db.execute(
@@ -221,35 +104,12 @@ async def create_group(
             )
             contact = result.scalar_one_or_none()
             if contact:
-                # 添加到群成员
                 await db.execute(
                     group_members.insert().values(
                         group_id=new_group.id,
                         contact_id=contact.id
                     )
                 )
-                
-                # 发送邀请通知
-                shared_key = f"group_{secrets.token_hex(32)}"
-                try:
-                    async with httpx.AsyncClient() as client:
-                        response = await client.post(
-                            f"{contact.portal_url}/api/groups/invite/receive",
-                            json={
-                                "group_id": new_group.group_id,
-                                "group_db_id": new_group.id,
-                                "group_name": new_group.name,
-                                "inviter_portal": settings.PORTAL_URL,
-                                "invitee_portal": contact.portal_url,
-                                "shared_key": shared_key,
-                                "timestamp": datetime.utcnow().isoformat()
-                            },
-                            timeout=10.0
-                        )
-                        if response.status_code == 200:
-                            invited_count += 1
-                except Exception as e:
-                    print(f"Failed to send invite to {contact.portal_url}: {e}")
         await db.flush()
     
     return {
@@ -262,8 +122,7 @@ async def create_group(
         "avatar": new_group.avatar,
         "is_active": new_group.is_active,
         "created_at": new_group.created_at,
-        "members": [],
-        "invited_count": invited_count
+        "members": []
     }
 
 

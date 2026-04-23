@@ -225,35 +225,14 @@ async def approve_request(
         )
     
     # 1. 在本机添加对方为联系人（使用申请方提供的 shared_key）
-    # 先检查是否已存在相同的 portal_url（可能是之前删除的）
-    result = await db.execute(
-        select(Contact).where(
-            and_(
-                Contact.owner_id == current_user.id,
-                Contact.portal_url == contact_request.requester_portal
-            )
-        )
+    new_contact = Contact(
+        owner_id=current_user.id,
+        display_name=contact_request.requester_name,
+        portal_url=contact_request.requester_portal,
+        shared_key=shared_key,  # 使用申请方提供的密钥
+        is_active=True
     )
-    existing_contact = result.scalar_one_or_none()
-    
-    if existing_contact:
-        # 重用已有的联系人（只是激活它）
-        existing_contact.display_name = contact_request.requester_name
-        existing_contact.shared_key = shared_key
-        existing_contact.is_active = True
-        new_contact = existing_contact
-        print(f"[CONTACT] Reactivated existing contact: {new_contact.id}")
-    else:
-        # 创建新的联系人
-        new_contact = Contact(
-            owner_id=current_user.id,
-            display_name=contact_request.requester_name,
-            portal_url=contact_request.requester_portal,
-            shared_key=shared_key,  # 使用申请方提供的密钥
-            is_active=True
-        )
-        db.add(new_contact)
-        print(f"[CONTACT] Created new contact: {new_contact.id}")
+    db.add(new_contact)
     
     # 2. 更新请求状态
     contact_request.status = "approved"
