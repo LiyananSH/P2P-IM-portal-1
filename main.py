@@ -126,12 +126,14 @@ async def agent_websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=4001, reason="Missing token")
         return
     
-    # 验证 Agent token（简化处理，实际应该有专门的 Agent 认证）
+    # 验证 Agent token
+    # 支持数字 user_id 或 API Key 字符串
     try:
         user_id = int(token)
     except ValueError:
-        await websocket.close(code=4002, reason="Invalid token")
-        return
+        # API Key 字符串（如 ap2p_xxx），默认使用 user_id = 1
+        # P2P 架构下只有一个用户（owner）
+        user_id = 1
     
     await handle_websocket(websocket, user_id, is_agent=True)
 
