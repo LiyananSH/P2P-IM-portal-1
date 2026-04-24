@@ -1,4 +1,6 @@
 import json
+import asyncio
+from datetime import datetime
 from typing import Dict, List, Set, Optional
 from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -128,7 +130,7 @@ async def process_message(websocket: WebSocket, user_id: int, data: dict, is_age
     elif msg_type == "agent_response":
         # Agent 回复消息（仅 Agent 可发送）
         if is_agent:
-            await handle_agent_response(user_id, data)
+            await handle_agent_response(user_id, data.get("data", {}))
         else:
             await websocket.send_json({
                 "type": "error",
@@ -172,16 +174,39 @@ async def handle_agent_message(websocket: WebSocket, user_id: int, data: dict):
     })
 
 
-async def handle_agent_message_from_user(user_id: int, data: dict):
-    """处理用户发送给 Agent 的消息
-    转发给已连接的 Agent（p2p-channel-plugin）
+async def save_agent_message(user_id: int, content: str) -> Optional[int]:
+    """保存用户发送给 Agent 的消息到数据库
+    
+    Returns:
+        消息 ID 或 None（保存失败）
     """
-    content = data.get("content", "")
-    timestamp = data.get("timestamp", "")
+    try:
+        async with AsyncSessionLocal() as db:
+            message = Message(
+                sender_id=user_id,
+                contact_id=0,  # 0 表示 My Agent
+                content=content,
+                message_type="text",
+                is_from_owner=True,
+                is_read=False,  # Agent 未读
+                created_at=datetime.now()
+            )
+            db.add(message)
+            await db.commit()
+            await db.refresh(message)
+            print(f"[AGENT_MSG] Message saved, id={message.id}")
+            return message.id
+    except Exception as e:
+        print(f"[AGENT_MSG] Failed to save message: {e}")
+        return None
+
+
+async def forward_to_agents(user_id: int, content: str, timestamp: str) -> bool:
+    """转发消息给所有已连接的 Agent
     
-    print(f"[AGENT_MSG] User {user_id} -> Agent: {content[:50]}...")
-    
-    # 转发给所有已连接的 Agent（p2p-channel-plugin）
+    Returns:
+        是否至少成功转发给一个 Agent
+    """
     agent_forwarded = False
     for agent_user_id, agent_ws in manager.agent_connections.items():
         try:
@@ -195,19 +220,50 @@ async def handle_agent_message_from_user(user_id: int, data: dict):
             print(f"[AGENT_MSG] Forwarded to Agent {agent_user_id}")
         except Exception as e:
             print(f"[AGENT_MSG] Failed to forward to Agent {agent_user_id}: {e}")
+    return agent_forwarded
+
+
+async def handle_agent_message_from_user(user_id: int, data: dict):
+    """处理用户发送给 Agent 的消息
     
-    # 通知用户消息已转发
+    并行执行：
+    1. 保存消息到数据库（用于历史记录）
+    2. 转发给已连接的 Agent（p2p-channel-plugin）
+    """
+    content = data.get("content", "")
+    timestamp = data.get("timestamp", "")
+    
+    print(f"[AGENT_MSG] User {user_id} -> Agent: {content[:50]}...")
+    
+    # 并行执行保存和转发
+    save_task = asyncio.create_task(save_agent_message(user_id, content))
+    forward_task = asyncio.create_task(forward_to_agents(user_id, content, timestamp))
+    
+    # 等待两者完成（允许失败）
+    message_id, agent_forwarded = await asyncio.gather(
+        save_task, forward_task, return_exceptions=True
+    )
+    
+    # 处理异常结果
+    if isinstance(message_id, Exception):
+        print(f"[AGENT_MSG] Save task failed: {message_id}")
+        message_id = None
+    if isinstance(agent_forwarded, Exception):
+        print(f"[AGENT_MSG] Forward task failed: {agent_forwarded}")
+        agent_forwarded = False
+    
+    # 通知用户处理结果
     if user_id in manager.user_connections:
         user_ws = manager.user_connections[user_id]
         if agent_forwarded:
             await user_ws.send_json({
                 "type": "ack",
-                "data": {"message": "Message forwarded to Agent"}
+                "data": {"message": "Message forwarded to Agent", "saved": message_id is not None}
             })
         else:
             await user_ws.send_json({
                 "type": "error",
-                "data": {"message": "No Agent connected"}
+                "data": {"message": "No Agent connected", "saved": message_id is not None}
             })
 
 
