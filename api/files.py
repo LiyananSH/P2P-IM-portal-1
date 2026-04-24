@@ -123,9 +123,23 @@ async def download_file(
     current_user: User = Depends(get_current_user)
 ):
     """
-    下载文件
+    下载文件（需要认证）
     验证用户权限后返回文件
     """
+    return await serve_file(file_path)
+
+
+@router.get("/public/{file_path:path}")
+async def public_download_file(file_path: str):
+    """
+    公开下载文件（无需认证）
+    用于聊天中的文件链接直接访问
+    """
+    return await serve_file(file_path)
+
+
+async def serve_file(file_path: str):
+    """提供文件下载的通用函数"""
     # 安全检查：防止目录遍历
     if ".." in file_path or file_path.startswith("/"):
         raise HTTPException(
