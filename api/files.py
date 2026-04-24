@@ -98,6 +98,11 @@ async def upload_file(
     # 生成文件路径
     file_path, file_url = generate_file_path(file.filename)
     
+    # 获取当前 Portal URL，构建完整文件 URL
+    settings = get_settings()
+    portal_url = settings.PORTAL_URL.rstrip('/')
+    full_file_url = f"{portal_url}{file_url}"
+    
     # 保存文件
     try:
         with open(file_path, "wb") as f:
@@ -109,7 +114,7 @@ async def upload_file(
         )
     
     return {
-        "file_url": file_url,
+        "file_url": full_file_url,
         "file_name": file.filename,
         "file_size": file_size,
         "file_type": get_file_type(file.content_type),
